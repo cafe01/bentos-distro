@@ -5,7 +5,8 @@ updated: 2026-03-26
 
 edges:
   episodic:
-    - distro-build-state.md: 1.0
+    - s310-nap.md: 1.0
+    - distro-build-state.md: 0.5
 
   semantic:
     - build-lessons.md: 0.9
