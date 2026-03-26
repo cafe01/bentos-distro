@@ -1,0 +1,4 @@
+vsock
+vmw_vsock_virtio_transport
+cuse
+virtio_net

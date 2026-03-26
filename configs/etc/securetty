@@ -1,0 +1,5 @@
+console
+tty0
+tty1
+tty2
+hvc0

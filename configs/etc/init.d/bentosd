@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+
+name="bentosd"
+description="BentOS device and driver daemon"
+command="/usr/bin/bentosd"
+command_background=true
+pidfile="/run/bentos/bentosd.pid"
+output_log="/var/log/bentosd.log"
+error_log="/var/log/bentosd.log"
+
+depend() {
+    need modules
+    after networking
+}
+
+start_pre() {
+    mkdir -p /run/bentos
+    checkpath --directory --mode 0755 /run/bentos
+}

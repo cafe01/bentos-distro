@@ -1,0 +1,14 @@
+agent: john
+scope: bentos_distro
+session: 1
+updated: 2026-03-26
+
+edges:
+  episodic:
+    - distro-build-state.md: 1.0
+
+  semantic:
+    - build-lessons.md: 0.9
+
+  prospective:
+    - next-actions.md: 1.0

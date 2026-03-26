@@ -2,7 +2,7 @@
 
 > Implementor: John (SWE)
 > Owner: Cafe (CTO)
-> Status: Not started
+> Status: M0+M1+M2 complete (S309)
 > Blocks: bentos-vmm-macos M3 (boot a VM) — needs kernel + rootfs artifacts
 
 Two outputs: (1) ARM64 kernel image, (2) ARM64 rootfs image.
@@ -18,11 +18,11 @@ x86-64 deferred until bentos-vmm-linux exists.
 
 Build a bootable ARM64 Linux kernel from Alpine's `linux-virt` with BentOS config changes.
 
-- [ ] **M0.1** Obtain Alpine `linux-virt` kernel source and config
+- [x] **M0.1** Obtain Alpine `linux-virt` kernel source and config
   - Alpine packages the config as `linux-virt` in their aports tree
   - Clone aports or extract config from an existing Alpine `linux-virt` package
   - Identify the kernel version (currently 6.12.x LTS branch)
-- [ ] **M0.2** Create `bentos_defconfig` for ARM64
+- [x] **M0.2** Create `bentos_defconfig` for ARM64
   - Start from Alpine's `linux-virt` ARM64 config
   - Apply BentOS changes:
 
@@ -43,7 +43,7 @@ Build a bootable ARM64 Linux kernel from Alpine's `linux-virt` with BentOS confi
   - Strip anything not needed: USB, sound, GPU/DRM, physical NICs, physical storage, wireless, Bluetooth, input devices, unused filesystems
   - Place at `kernel/arm64/bentos_defconfig`
 
-- [ ] **M0.3** Cross-compile the kernel
+- [x] **M0.3** Cross-compile the kernel
   - On macOS: use a Docker/OrbStack container with `aarch64-linux-gnu-gcc` cross-compiler
   - Or: build natively on the ARM64 Mac inside an Alpine container
   - ```bash
@@ -51,7 +51,7 @@ Build a bootable ARM64 Linux kernel from Alpine's `linux-virt` with BentOS confi
     make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) Image
     ```
   - Output: `arch/arm64/boot/Image` (~5-10 MB)
-- [ ] **M0.4** Validate the kernel
+- [x] **M0.4** Validate the kernel
   - `file arch/arm64/boot/Image` -> shows ARM64 executable
   - Check built-in options: `scripts/config --file .config --state CONFIG_FUSE_FS` -> `y`
   - Check module options: `scripts/config --file .config --state CONFIG_CUSE` -> `m`
@@ -63,15 +63,15 @@ Build a bootable ARM64 Linux kernel from Alpine's `linux-virt` with BentOS confi
 
 Build a rootfs that boots to a login prompt inside VZ.fw. No BentOS binaries yet — just Alpine base + essential services.
 
-- [ ] **M1.1** Set up rootfs build environment
+- [x] **M1.1** Set up rootfs build environment
   - Docker/OrbStack container with Alpine (ARM64) or `qemu-aarch64-static` for cross-arch `apk`
   - Script: `scripts/build-rootfs.sh --arch arm64 --output output/arm64/bentos-rootfs-arm64.img`
-- [ ] **M1.2** Create sparse ext4 image
+- [x] **M1.2** Create sparse ext4 image
   - ```bash
     truncate -s 512M rootfs.img
     mkfs.ext4 -L bentos-root rootfs.img
     ```
-- [ ] **M1.3** Install Alpine base packages
+- [x] **M1.3** Install Alpine base packages
   - Mount the image, bootstrap apk:
   - ```bash
     mount -o loop rootfs.img /tmp/rootfs
@@ -81,7 +81,7 @@ Build a rootfs that boots to a login prompt inside VZ.fw. No BentOS binaries yet
         add alpine-base bash openssh-server shadow sudo \
             networking ifupdown musl-utils busybox-initscripts openrc
     ```
-- [ ] **M1.4** Configure essential system files
+- [x] **M1.4** Configure essential system files
   - `/etc/hostname` -> `bentos`
   - `/etc/hosts` -> `127.0.0.1 localhost bentos`
   - `/etc/resolv.conf` -> `nameserver 8.8.8.8` (overridden by DHCP)
@@ -97,13 +97,13 @@ Build a rootfs that boots to a login prompt inside VZ.fw. No BentOS binaries yet
   - `/etc/inittab` -> ensure `ttyS0`/`hvc0` console getty if needed
   - `/etc/securetty` -> add `hvc0` (allow root login on virtio-console)
   - Set root password (or enable autologin on console for dev)
-- [ ] **M1.5** Enable services in default runlevel
+- [x] **M1.5** Enable services in default runlevel
   - ```bash
     chroot /tmp/rootfs rc-update add networking default
     chroot /tmp/rootfs rc-update add sshd default
     chroot /tmp/rootfs rc-update add modules boot
     ```
-- [ ] **M1.6** Unmount, finalize image
+- [x] **M1.6** Unmount, finalize image
   - ```bash
     umount /tmp/rootfs
     e2fsck -f rootfs.img
@@ -116,15 +116,15 @@ Build a rootfs that boots to a login prompt inside VZ.fw. No BentOS binaries yet
 
 The kernel modules built in M0 need to be on the rootfs so `modprobe` can load them.
 
-- [ ] **M2.1** Extract modules from kernel build
+- [x] **M2.1** Extract modules from kernel build
   - ```bash
     make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_install \
         INSTALL_MOD_PATH=/tmp/rootfs
     ```
   - This installs `cuse.ko`, `virtiofs.ko`, and `modules.dep` into `/lib/modules/<version>/`
-- [ ] **M2.2** Rebuild rootfs image with modules included
+- [x] **M2.2** Rebuild rootfs image with modules included
   - Mount, copy modules, rebuild depmod, unmount
-- [ ] **M2.3** Verify module loading
+- [ ] **M2.3** Verify module loading (requires VM boot)
   - Boot the VM
   - `lsmod` shows `cuse` loaded (from `/etc/modules`)
   - `modprobe virtiofs` loads successfully

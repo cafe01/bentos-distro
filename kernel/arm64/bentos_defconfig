@@ -1,0 +1,25 @@
+# BentOS ARM64 kernel config delta from Alpine linux-virt 6.12.x
+#
+# Base: Alpine linux-virt ARM64 config (/boot/config-6.12.77-0-virt)
+# Applied on top with scripts/config + olddefconfig
+#
+# BentOS-specific changes:
+CONFIG_FUSE_FS=y
+CONFIG_CUSE=m
+# CONFIG_VIRTIO_VSOCK is handled via VSOCKETS/VIRTIO_VSOCKETS (=m, loaded at boot)
+CONFIG_VIRTIO_FS=m
+# CONFIG_GCC_PLUGINS is not set
+# CONFIG_MODULE_SIG is not set
+# CONFIG_MODULE_SIG_ALL is not set
+CONFIG_MODULE_SIG_KEY=""
+CONFIG_SYSTEM_TRUSTED_KEYS=""
+CONFIG_SYSTEM_REVOCATION_KEYS=""
+# CONFIG_USB_SUPPORT is not set
+# CONFIG_SOUND is not set
+# CONFIG_DRM is not set
+# CONFIG_WLAN is not set
+# CONFIG_BLUETOOTH is not set
+# CONFIG_WIRELESS is not set
+# CONFIG_RFKILL is not set
+# CONFIG_NFC is not set
+# CONFIG_MEDIA_SUPPORT is not set
