@@ -12,6 +12,7 @@ set -euo pipefail
 # Output: DIR/bentos-rootfs-arm64.img
 
 DISTRO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Repo root: two levels up from lib/bentos_distro
 REPO_ROOT="$(cd "${DISTRO_ROOT}/../.." && pwd)"
 OUTPUT_DIR="${DISTRO_ROOT}/output/arm64"
 CONFIGS_DIR="${DISTRO_ROOT}/configs"
@@ -69,26 +70,46 @@ if [ "$SKIP_BENTOS" = "false" ]; then
     docker rm -f "$DART_CONTAINER_NAME" 2>/dev/null || true
 
     # Use official Dart image on linux/arm64.
-    # Mount the entire lib/ directory so path dependencies resolve.
-    # dart compile exe produces a self-contained AOT binary.
+    # Mount the repo root read-only as /src; copy the needed packages to a
+    # writable /build directory so dart pub get can write .dart_tool/.
+    # dart compile exe produces a self-contained AOT binary (embeds Dart runtime).
     docker run --rm \
         --name "$DART_CONTAINER_NAME" \
         --platform linux/arm64 \
-        -v "${REPO_ROOT}/lib":/workspace/lib:ro \
+        -v "${REPO_ROOT}":/src:ro \
         -v "${BENTOS_BINS_DIR}":/output \
         dart:stable \
         /bin/sh -c '
 set -e
-cd /workspace/lib/bentosd
 
-echo "Installing dependencies..."
+echo "Copying workspace to writable build dir..."
+mkdir -p /build
+# Copy workspace root pubspec + only the packages we need to compile bentosd
+cp /src/pubspec.yaml /build/
+mkdir -p /build/lib
+cp -r /src/lib/bentosd /build/lib/
+cp -r /src/lib/bentos_fuse /build/lib/
+
+# Stub out all other workspace members so pub can resolve without them.
+# We list only the packages we care about in a minimal workspace pubspec.
+cat > /build/pubspec.yaml << "PUBSPEC"
+name: bentos_build
+environment:
+  sdk: "^3.5.0"
+workspace:
+  - lib/bentosd
+  - lib/bentos_fuse
+PUBSPEC
+
+cd /build
+echo "Resolving dependencies..."
 dart pub get
 
 echo "Compiling bentosd..."
-dart compile exe bin/bentosd.dart -o /output/bentosd
+dart compile exe lib/bentosd/bin/bentosd.dart -o /output/bentosd
 
 echo "Compiling bentos..."
-dart compile exe bin/bentos.dart -o /output/bentos
+dart compile exe lib/bentosd/bin/bentos.dart -o /output/bentos
 
 echo "Build complete:"
 ls -lh /output/
