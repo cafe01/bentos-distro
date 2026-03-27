@@ -1,6 +1,6 @@
 # bentos-distro
 
-[![CI](https://github.com/cafe01/bentos-distro/actions/workflows/ci.yml/badge.svg)](https://github.com/cafe01/bentos-distro/actions/workflows/ci.yml)
+<!-- CI badge: add when GitHub Actions workflow ships (Track E — Distro CI Pipeline) -->
 
 BentOS machine image build system and release pipeline. Produces bootable Linux images (kernel + rootfs) for BentOS virtual machines — the substrate that AI agents inhabit.
 
@@ -31,7 +31,8 @@ Each pair is a complete machine. The VMM loads the kernel and presents the rootf
 | M0 — Kernel | Done | ARM64 kernel from Alpine linux-virt source, BentOS config applied |
 | M1 — Rootfs | Done | Alpine base + system packages + kernel modules |
 | M2 — Kernel Modules | Done | Selective module install (CUSE, virtiofs, vsock) with depmod |
-| M6 — bentos-execd | Done | Rust binary baked into rootfs, OpenRC service at default runlevel |
+| M3 — BentOS Binaries | Done | bentosd 7.0MB + bentos 6.4MB ARM64 AOT in rootfs, fuse3-libs, OpenRC service. S310 |
+| M6 — bentos-execd | Done | Rust binary baked into rootfs, OpenRC service at default runlevel. S313. (M4-M5 are bentos-vmm-macos milestones, not distro — numbering follows Track E sequence) |
 | CI Pipeline | Planned | GitHub Actions building both architectures on push |
 | amd64 Support | Planned | x86-64 kernel + rootfs for bentos-vmm-linux |
 | Image Versioning | Planned | Semantic versions, published as GitHub Releases |
@@ -74,22 +75,25 @@ Kernel must build before rootfs — the rootfs needs kernel modules from the ker
 
 ### Release Pipeline (Target Architecture)
 
+bentos-execd and bentosd are packages within the `bentos` monorepo, not separate repositories. CI triggers use path filters on the monorepo:
+
 ```
-[bentos-execd push to main] ---\
-                                +--> [GitHub Actions] --> build kernel + rootfs
-[bentosd push to main] --------/         |                 (arm64 + amd64)
-                                         |
-                                         v
-                                [GitHub Releases]
-                                  bentos-v0.1.0-arm64.tar.gz
-                                  bentos-v0.1.0-amd64.tar.gz
-                                         |
-                                         v
-                              [bentos-vmm-* backends]
-                                download on demand
+[push to main]
+  paths: lib/bentos_execd/** ---\
+  paths: lib/bentosd/**     ----+--> [GitHub Actions] --> build kernel + rootfs
+  paths: lib/bentos_distro/**---/         |                 (arm64 + amd64)
+                                          |
+                                          v
+                                 [GitHub Releases]
+                                   bentos-v0.1.0-arm64.tar.gz
+                                   bentos-v0.1.0-amd64.tar.gz
+                                          |
+                                          v
+                               [bentos-vmm-* backends]
+                                 download on demand
 ```
 
-When bentos-execd or bentosd push to main, CI triggers automatically and builds a new image containing the latest binaries. Images are published as versioned GitHub Releases.
+When changes to bentos-execd, bentosd, or bentos_distro land on main, path-filtered CI triggers rebuild the image with the latest binaries. Images are published as versioned GitHub Releases.
 
 ### VMM Image Consumption (Target Architecture)
 
@@ -107,10 +111,12 @@ Machine creation references a version, not a file path:
 # Today (local build, file paths):
 POST /machines { boot: "bundled://bentos-arm64-Image" }
 
-# Target (versioned releases):
+# Proposed (versioned releases — needs CTO sign-off):
 POST /machines { boot: "bentos://v0.1.0" }
 bentos-vmm create --name dev --image v0.1.0
 ```
+
+> **Note**: The `bentos://` URI scheme is **proposed**, not decided. Needs CTO approval before adoption.
 
 ## Image Contents
 
