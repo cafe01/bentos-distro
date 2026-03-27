@@ -1,156 +1,261 @@
 # bentos-distro
 
-Build system for BentOS machine images. Takes Alpine packages + BentOS binaries + config files and produces two files per architecture: a kernel image and a root filesystem. These are what `bentos-vmm-*` daemons boot.
+[![CI](https://github.com/cafe01/bentos-distro/actions/workflows/ci.yml/badge.svg)](https://github.com/cafe01/bentos-distro/actions/workflows/ci.yml)
+
+BentOS machine image build system and release pipeline. Produces bootable Linux images (kernel + rootfs) for BentOS virtual machines — the substrate that AI agents inhabit.
+
+## What It Is
+
+bentos-distro is the **release pipeline** for BentOS machine images. It takes Alpine Linux packages, a custom kernel config, and BentOS binaries (bentosd, bentos-execd) and produces two artifacts per architecture: a kernel image and an ext4 root filesystem. These are what `bentos-vmm-*` daemons boot.
+
+The end state: CI-built, versioned images published as GitHub Releases. VMM backends download images on demand — like Docker pulling base images. bentos-distro is not a local build tool that ships with the product; it is the factory that produces the product.
 
 ## What It Produces
 
 ```
 output/
 +-- arm64/
-|   +-- bentos-kernel-arm64.gz        Kernel for VZ.fw (bentos-vmm-macos)
+|   +-- bentos-kernel-arm64           Kernel Image for VZ.fw (bentos-vmm-macos)
 |   +-- bentos-rootfs-arm64.img       ext4 rootfs (golden image)
-+-- x86_64/
++-- x86_64/                           (planned)
     +-- bentos-kernel-x86_64.bzImage  Kernel for Cloud Hypervisor (bentos-vmm-linux)
     +-- bentos-rootfs-x86_64.img      ext4 rootfs (golden image)
 ```
 
-Each pair is a complete machine. The VMM loads the kernel and presents the rootfs as a virtio-blk disk. Track E starts with ARM64 (macOS development on Apple Silicon). x86-64 follows when bentos-vmm-linux is built.
+Each pair is a complete machine. The VMM loads the kernel and presents the rootfs as a virtio-blk disk. ARM64 (macOS on Apple Silicon) is built and tested. x86-64 follows when bentos-vmm-linux ships.
+
+## Current State
+
+| Milestone | Status | What |
+|-----------|--------|------|
+| M0 — Kernel | Done | ARM64 kernel from Alpine linux-virt source, BentOS config applied |
+| M1 — Rootfs | Done | Alpine base + system packages + kernel modules |
+| M2 — Kernel Modules | Done | Selective module install (CUSE, virtiofs, vsock) with depmod |
+| M6 — bentos-execd | Done | Rust binary baked into rootfs, OpenRC service at default runlevel |
+| CI Pipeline | Planned | GitHub Actions building both architectures on push |
+| amd64 Support | Planned | x86-64 kernel + rootfs for bentos-vmm-linux |
+| Image Versioning | Planned | Semantic versions, published as GitHub Releases |
+| Initramfs | Planned | Replace `/etc/modules` workaround with proper initramfs |
 
 ## Architecture
 
-A BentOS machine image has two mandatory components:
+### Build Pipeline
 
-### Kernel Image
+Three scripts, one orchestrator:
 
-Custom Linux kernel compiled from Alpine's `linux-virt` source with BentOS-specific config changes. The delta from stock `linux-virt` is small:
+| Script | What It Does |
+|--------|-------------|
+| `scripts/build-kernel.sh` | Builds ARM64 kernel inside Docker from Alpine linux-virt source. Applies BentOS config (FUSE built-in, CUSE module, VIRTIO_VSOCK built-in, virtiofs module). Outputs kernel Image + modules. |
+| `scripts/build-rootfs.sh` | Two-stage build. Stage 1: cross-compiles bentos-execd (Rust/musl) and bentosd (Dart AOT) for ARM64. Stage 2: assembles ext4 rootfs in Docker — Alpine packages, kernel modules, BentOS binaries, system config. |
+| `scripts/build-image.sh` | Orchestrator. Runs kernel then rootfs in sequence. |
+
+All builds run inside Docker containers on `linux/arm64` for reproducibility. The host (macOS) never touches the target filesystem directly.
+
+```
+Makefile targets:
+  make arm64          # full build (kernel + rootfs)
+  make kernel-arm64   # kernel only
+  make rootfs-arm64   # rootfs only (requires kernel built first)
+  make clean          # remove output/
+```
+
+### Dependency Chain
+
+```
+bentos-execd (Rust)  --->  build-rootfs.sh  --->  rootfs image
+bentosd (Dart AOT)   --->       |
+bentos (Dart AOT)    --->       |
+                                |
+build-kernel.sh  ---> kernel image + modules ---> build-rootfs.sh
+                                                   (modules go into rootfs)
+```
+
+Kernel must build before rootfs — the rootfs needs kernel modules from the kernel build.
+
+### Release Pipeline (Target Architecture)
+
+```
+[bentos-execd push to main] ---\
+                                +--> [GitHub Actions] --> build kernel + rootfs
+[bentosd push to main] --------/         |                 (arm64 + amd64)
+                                         |
+                                         v
+                                [GitHub Releases]
+                                  bentos-v0.1.0-arm64.tar.gz
+                                  bentos-v0.1.0-amd64.tar.gz
+                                         |
+                                         v
+                              [bentos-vmm-* backends]
+                                download on demand
+```
+
+When bentos-execd or bentosd push to main, CI triggers automatically and builds a new image containing the latest binaries. Images are published as versioned GitHub Releases.
+
+### VMM Image Consumption (Target Architecture)
+
+VMM backends do **not** ship with images baked in. They download versioned images from GitHub Releases on demand:
+
+```
+bentos-vmm images list              # list available versions from releases
+bentos-vmm images pull v0.1.0       # download kernel + rootfs for current arch
+bentos-vmm images current           # show currently active image version
+```
+
+Machine creation references a version, not a file path:
+
+```
+# Today (local build, file paths):
+POST /machines { boot: "bundled://bentos-arm64-Image" }
+
+# Target (versioned releases):
+POST /machines { boot: "bentos://v0.1.0" }
+bentos-vmm create --name dev --image v0.1.0
+```
+
+## Image Contents
+
+### Kernel
+
+Custom Linux kernel compiled from Alpine's `linux-virt` source. The delta from stock is small:
 
 | Config | Setting | Why |
 |--------|---------|-----|
-| `CONFIG_FUSE_FS` | `=y` (built-in) | Load-bearing. bentosd depends on it. Must be immediate. |
+| `CONFIG_FUSE_FS` | `=y` (built-in) | bentosd depends on FUSE. Must be immediate at boot. |
 | `CONFIG_CUSE` | `=m` (module) | Device nodes in `/dev/`. Loaded after boot via `/etc/modules`. |
 | `CONFIG_VIRTIO_VSOCK` | `=y` (built-in) | Guest-to-host control plane (bentosd <-> bentos-vmm-*). |
-| `CONFIG_VIRTIO_FS` | `=m` (module) | Host filesystem sharing via virtiofs. Optional, loaded on demand. |
+| `CONFIG_VIRTIO_FS` | `=m` (module) | Host filesystem sharing via virtiofs. Loaded on demand. |
 
 Everything else inherited from `linux-virt`: virtio drivers (blk, net, console, rng), namespaces, cgroups, seccomp, overlayfs, ext4. Physical hardware drivers stripped.
 
-| Property | ARM64 | x86-64 |
+| Property | ARM64 | x86-64 (planned) |
 |----------|-------|--------|
 | Source | Alpine `linux-virt` | Alpine `linux-virt` |
-| Format | Uncompressed `Image` or `Image.gz` | `bzImage` |
+| Format | Uncompressed `Image` | `bzImage` |
 | VMM loads via | `VZLinuxBootLoader(kernelURL:)` | `cloud-hypervisor --kernel` |
 | Virtio transport | MMIO | PCI |
-| Size | ~5-10 MB | ~5-10 MB |
+| Size | ~19 MB | ~5-10 MB |
 
 ### Root Filesystem
 
-ext4 disk image containing everything that makes a machine BentOS. Built by running `apk` against a target directory, copying BentOS binaries, and applying config.
+ext4 disk image (~38 MB after shrink). Contains everything that makes a machine BentOS.
 
-**Bill of materials by subsystem:**
-
-| Subsystem | Packages / Components | Size |
-|-----------|----------------------|------|
-| Alpine base | musl, BusyBox, apk-tools, OpenRC | ~6 MB |
-| System packages | bash, shadow, openssh-server, sudo, networking, ifupdown | ~5 MB |
-| Kernel modules | cuse.ko, virtiofs.ko in `/lib/modules/` | ~1-2 MB |
-| BentOS binaries | bentosd, bentos-agent (Dart AOT), bentos CLI | ~30-50 MB |
-| Container runtime | containerd, runc | ~30-40 MB |
-| Config + user homes | /etc/*, /home/alfred/, /etc/skel/ | <1 MB |
-| **Total** | | **~70-100 MB** |
-
-**What's NOT in the rootfs:** No compilers, no dev tools, no desktop software, no GUI, no databases, no web servers, no man pages, no pre-attached devices. The machine starts closed.
-
-## Rootfs Composition
-
-### Package Layer (Alpine)
+**Alpine base layer:**
 
 ```
 alpine-base          musl + BusyBox + apk-tools + Alpine config
 bash                 Agent login shell (LLMs expect bash)
 openssh-server       Console sessions into the machine
-shadow               useradd, usermod, chfn — full POSIX user tools
+shadow               useradd, usermod — full POSIX user tools
 sudo                 Controlled privilege escalation
-networking           virtio-net interface configuration
-ifupdown             Interface up/down scripts
 musl-utils           ldd, getent, getconf
-fuse3                FUSE/CUSE kernel interface (bentosd FFI dependency)
-containerd           Container runtime for driver processes
-runc                 OCI container executor
-busybox-initscripts  Boot-time scripts (mount /proc, /sys, /dev)
-bsd-finger           Agent discovery (finger, fingerd)
+fuse3                FUSE/CUSE kernel interface
 ```
 
-### BentOS Layer
+**BentOS layer:**
 
-| File | What |
-|------|------|
-| `/usr/bin/bentosd` | Device/driver orchestration daemon (Dart AOT) |
-| `/usr/bin/bentos-agent` | Agent executable (Dart AOT) |
-| `/usr/bin/bentos` | CLI client to bentosd |
+| Binary | Location | What |
+|--------|----------|------|
+| bentos-execd | `/usr/sbin/bentos-execd` | Exec-over-vsock guest agent (528 KB Rust static binary) |
+| bentosd | `/usr/bin/bentosd` | Device/driver orchestration daemon (Dart AOT) |
+| bentos | `/usr/bin/bentos` | Guest-side CLI client to bentosd (Dart AOT) |
 
-### Init Configuration (OpenRC)
+**Kernel modules** (selectively installed, not the full tree):
 
-| File | What |
-|------|------|
-| `/etc/init.d/bentosd` | OpenRC service with `supervise-daemon`, depends on `net` |
-| `/etc/init.d/bentos-agent.*` | Per-agent service, depends on `bentosd` |
-| `/etc/init.d/containerd` | Container runtime service |
-| `/etc/modules` | `cuse` — loaded at boot by the modules service |
-| `/etc/runlevels/default/` | Symlinks enabling bentosd, agents, sshd, containerd |
+```
+cuse.ko.gz                              CUSE device nodes
+virtiofs.ko.gz                          Host filesystem sharing
+vsock.ko.gz + virtio transport modules  Guest-host communication
+```
 
-### User Model
+**Init (OpenRC):**
 
-| File | What |
-|------|------|
-| `/etc/passwd` | System users + pre-configured agents (alfred) |
-| `/etc/shadow` | Password hashes (agents: locked — `!` or `*`) |
-| `/etc/group` | Groups: `agents`, `bentos`, `fuse` |
-| `/etc/skel/.bashrc` | Agent shell configuration |
-| `/etc/skel/.profile` | Agent environment |
-| `/etc/skel/.plan` | finger plan file (empty) |
-| `/etc/skel/.project` | finger project file (empty) |
-| `/etc/skel/.mem/` | Memory graph root |
-| `/etc/skel/office/` | Agent workspace |
-| `/home/alfred/` | Pre-forged agent home (from skel) |
+| Service | Runlevel | What |
+|---------|----------|------|
+| bentos-execd | default | Exec agent on vsock — runs before bentosd and networking |
+| bentosd | default | Device daemon, depends on net |
+| sshd | default | SSH access |
+| networking | default | eth0 via DHCP on virtio-net |
+| modules | boot | Loads `cuse` from `/etc/modules` |
 
-### System Configuration
+**What's NOT in the rootfs:** No compilers, no dev tools, no GUI, no databases, no web servers. The machine starts closed.
 
-| File | What |
-|------|------|
-| `/etc/bentos/config.yaml` | bentosd configuration (defaults) |
-| `/etc/network/interfaces` | `eth0` via DHCP (virtio-net) |
-| `/etc/hostname` | Machine identity (overridden per instance) |
-| `/etc/hosts` | Localhost resolution |
-| `/etc/resolv.conf` | DNS (host-provided) |
-| `/etc/bentos-release` | Image version, Alpine version, kernel version, build date, image hash |
+### Config Files
 
-## Baked vs. Runtime
+System config lives in `configs/` — the single source of truth for everything baked into the rootfs:
 
-| Baked into the image | Configured at boot/runtime |
-|---------------------|---------------------------|
-| All Alpine packages | Network IP address (DHCP) |
-| BentOS binaries | SSH host keys (generated at first boot) |
-| OpenRC service definitions | Machine-specific hostname |
-| `/etc/skel/` template | Agent SSH authorized_keys |
-| `/etc/passwd` (system + pre-configured agents) | Runtime agent creation (`useradd`) |
-| Kernel modules | Device attachments (`bentos device attach`) |
-| `/etc/bentos/config.yaml` (defaults) | Per-machine config overrides |
+```
+configs/
++-- etc/
+    +-- hostname              Machine identity (overridden per instance)
+    +-- hosts                 Localhost resolution
+    +-- modules               Kernel modules to load at boot (cuse)
+    +-- securetty             Secure TTY list
+    +-- network/
+    |   +-- interfaces        eth0 via DHCP
+    +-- init.d/
+        +-- bentos-execd      OpenRC service for exec agent
+        +-- bentosd           OpenRC service for device daemon
+```
 
-The image is a template. Many machines boot from it. Runtime config makes each instance unique.
+## Building Locally
 
-## Per-Architecture Build
+**Prerequisites:** Docker (with `linux/arm64` platform support — native on Apple Silicon, QEMU on x86).
 
-Same package list, same config files, different binaries:
+### Full Image Build
 
-| | ARM64 (macOS) | x86-64 (Linux/hosted) |
-|---|---|---|
-| Alpine packages | aarch64 binaries | x86_64 binaries |
-| Dart AOT binaries | ARM64 target | x86-64 target |
-| Kernel defconfig | `arch/arm64/configs/bentos_defconfig` | `arch/x86/configs/bentos_defconfig` |
-| Kernel output | `Image` or `Image.gz` | `bzImage` |
+```bash
+cd lib/bentos_distro
 
-Config files are architecture-independent. The build pipeline maintains one set of configs and injects per-arch binaries.
+# Build everything: kernel + rootfs (includes bentos-execd and bentosd compilation)
+bash scripts/build-image.sh
 
-## Boot Sequence (what happens after VMM starts the machine)
+# Or via Make
+make arm64
+```
+
+### Individual Steps
+
+```bash
+# Kernel only (must run first — rootfs depends on modules)
+bash scripts/build-kernel.sh
+
+# Rootfs only (requires kernel modules in output/arm64/modules/)
+bash scripts/build-rootfs.sh
+
+# Rootfs without BentOS binaries (fast iteration on Alpine config)
+bash scripts/build-rootfs.sh --no-bentos
+
+# Custom output directory
+bash scripts/build-image.sh --output /tmp/bentos-build
+
+# Custom rootfs size
+bash scripts/build-rootfs.sh --size 512
+```
+
+### Build Requirements for BentOS Binaries
+
+The rootfs build compiles BentOS binaries inside Docker:
+
+- **bentos-execd**: Requires Rust with `aarch64-unknown-linux-musl` target and musl-cross linker on the host (cross-compiled outside Docker).
+- **bentosd / bentos**: Compiled inside a `dart:stable` Docker container targeting `linux/arm64`.
+
+Use `--no-bentos` to skip binary compilation when iterating on the base image.
+
+### Output
+
+```bash
+output/arm64/
++-- bentos-kernel-arm64          # Kernel Image (~19 MB)
++-- bentos-rootfs-arm64.img      # ext4 rootfs (~38 MB)
++-- bentos_defconfig_full        # Full kernel .config for reference
++-- modules/                     # Kernel modules (consumed by rootfs build)
++-- bentos-bins/                 # Dart AOT binaries (intermediate)
++-- bentos-execd-bin/            # Rust binary (intermediate)
+```
+
+## Boot Sequence
+
+What happens after `bentos-vmm-macos` starts a machine with these artifacts:
 
 ```
 1. VMM loads kernel + presents rootfs as /dev/vda
@@ -165,28 +270,19 @@ Config files are architecture-independent. The build pipeline maintains one set 
    - Load modules from /etc/modules (cuse.ko)
    - Configure networking (eth0 via DHCP on virtio-net)
 5. OpenRC default:
-   - Start containerd
-   - Start bentosd (supervised, depends on net)
+   - Start bentos-execd (vsock listener on port 5100)
+   - Start bentosd (FUSE/CUSE + vsock to host)
    - Start sshd
-   - Start bentos-agent.alfred (supervised, depends on bentosd, runs as user alfred)
-6. bentosd:
-   - Opens FUSE/CUSE kernel interface
-   - Connects vsock to bentos-vmm-* on port 5000
-   - Waits for device attach commands
-7. Machine is running. Agents are inhabiting. /dev/ is empty. Starts closed.
+6. Machine is running. /dev/ is empty. Starts closed.
 ```
 
-From `vm.start()` to bentosd connected: under 2 seconds on Apple Silicon.
+From `vm.start()` to bentos-execd connected: under 2 seconds on Apple Silicon.
 
-## Key References
+## What's Next
 
-| Document | What it covers |
-|----------|---------------|
-| `university/cs/linux-distros/lessons/06-the-kernel.md` | Kernel config: what's built-in, what's module, what's excluded |
-| `university/cs/linux-distros/lessons/07-the-decision.md` | Why Alpine won (evidence-based, revised from Debian) |
-| `university/cs/linux-distros/lessons/09-from-distro-to-machine-image.md` | Full BOM, build pipeline, per-arch, boot sequence |
-| `university/cs/linux-distros/lessons/05-base-system.md` | Base packages, BusyBox vs GNU, FHS layout |
-| `university/cs/linux-distros/lessons/08-user-management.md` | Agent user model, GECOS, groups, skel, presence |
-| `university/cs/linux-distros/lessons/03-init-systems.md` | OpenRC, service supervision, boot sequence |
-| `university/cs/apple-virtualization/lessons/12-the-boot-pipeline.md` | Boot pipeline from VMM perspective, bundled:// convention |
-| `hq/console-virtualization-intel.md` | Guest stack architecture, VMM abstraction layer |
+- **CI Pipeline**: GitHub Actions workflow building arm64 images on push. Triggered by bentos-execd and bentosd changes.
+- **amd64 Support**: x86-64 kernel (`bzImage`) + rootfs for bentos-vmm-linux (Cloud Hypervisor backend).
+- **Image Versioning**: Semantic versioned releases. `bentos-v0.1.0-arm64.tar.gz` containing kernel + rootfs.
+- **VMM Image Management**: `bentos-vmm images list/pull/current` — backends download images from releases instead of requiring local builds.
+- **Initramfs**: Replace the `/etc/modules` workaround with a proper initramfs for cleaner module loading.
+- **Full BentOS Rootfs**: Container runtime (containerd + runc), agent user model (`/etc/skel/`, `/home/alfred/`), `bentos-agent` binary.
