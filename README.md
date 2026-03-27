@@ -84,8 +84,8 @@ Each upstream package (bentos-execd, bentosd) has its own repo and CI. When upst
                                                                |
                                                                v
                                                       [GitHub Releases]
-                                                        bentos-v0.1.0-arm64.tar.gz
-                                                        bentos-v0.1.0-amd64.tar.gz
+                                                        bentos-alpine-6.12-arm64-20260327-42.tar.gz
+                                                        bentos-alpine-6.12-amd64-20260327-42.tar.gz
                                                                |
                                                                v
                                                     [bentos-vmm-* backends]
@@ -99,23 +99,25 @@ Cross-repo trigger: upstream repo CI posts `repository_dispatch` to bentos-distr
 VMM backends do **not** ship with images baked in. They download versioned images from GitHub Releases on demand:
 
 ```
-bentos-vmm images list              # list available versions from releases
-bentos-vmm images pull v0.1.0       # download kernel + rootfs for current arch
-bentos-vmm images current           # show currently active image version
+bentos-vmm images list              # list available versions from GitHub Releases
+bentos-vmm images pull v0.1.0       # download kernel + rootfs to ~/.bentos/images/
+bentos-vmm images current           # show what's cached locally
 ```
 
-Machine creation references a version, not a file path:
+Machine creation references an image via standard URI schemes:
 
 ```
-# Today (local build, file paths):
+# Dev mode (bundled next to binary):
 POST /machines { boot: "bundled://bentos-arm64-Image" }
 
-# Proposed (versioned releases — needs CTO sign-off):
-POST /machines { boot: "bentos://v0.1.0" }
-bentos-vmm create --name dev --image v0.1.0
+# Local filesystem (explicit path):
+POST /machines { boot: "file:///Users/me/.bentos/images/bentos-alpine-6.12-arm64-20260327-42/kernel" }
+
+# Remote download (GitHub Releases):
+POST /machines { boot: "https://github.com/anthropics/bentos/releases/download/build-42/bentos-alpine-6.12-arm64-20260327-42.tar.gz" }
 ```
 
-> **Note**: The `bentos://` URI scheme is **proposed**, not decided. Needs CTO approval before adoption.
+The `boot` config in `BentosVmConfig` accepts `bundled://`, `file://`, or `https://` URIs. No custom URI scheme — standard protocols cover all cases. `bentos-vmm images pull` downloads from HTTPS into local cache (`~/.bentos/images/`), and `boot` resolves from cache via version string or explicit `file://` path.
 
 ## Image Contents
 
@@ -287,7 +289,7 @@ From `vm.start()` to bentos-execd connected: under 2 seconds on Apple Silicon.
 
 - **CI Pipeline**: GitHub Actions workflow building arm64 images. Triggered by `repository_dispatch` from upstream bentos-execd and bentosd repo CIs.
 - **amd64 Support**: x86-64 kernel (`bzImage`) + rootfs for bentos-vmm-linux (Cloud Hypervisor backend).
-- **Image Versioning**: Semantic versioned releases. `bentos-v0.1.0-arm64.tar.gz` containing kernel + rootfs.
+- **Image Versioning**: Content-descriptive naming: `bentos-alpine-6.12-arm64-20260327-42.tar.gz` (distro + kernel + arch + date + build). GitHub Release tag = build key. Filename IS the metadata.
 - **VMM Image Management**: `bentos-vmm images list/pull/current` — backends download images from releases instead of requiring local builds.
 - **Initramfs**: Replace the `/etc/modules` workaround with a proper initramfs for cleaner module loading.
 - **Full BentOS Rootfs**: Container runtime (containerd + runc), agent user model (`/etc/skel/`, `/home/alfred/`), `bentos-agent` binary.
