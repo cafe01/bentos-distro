@@ -51,6 +51,46 @@ echo "Skip BentOS: ${SKIP_BENTOS}"
 # ---------------------------------------------------------------------------
 
 BENTOS_BINS_DIR="${OUTPUT_DIR}/bentos-bins"
+EXECD_BIN_DIR="${OUTPUT_DIR}/bentos-execd-bin"
+
+# ---------------------------------------------------------------------------
+# Stage 1.5: Compile bentos-execd Rust binary (ARM64 musl)
+# ---------------------------------------------------------------------------
+
+EXECD_SRC="${REPO_ROOT}/lib/bentos_execd"
+
+if [ "$SKIP_BENTOS" = "false" ]; then
+    echo ""
+    echo "--- Stage 1.5: Compiling bentos-execd (ARM64 musl) ---"
+
+    if [ ! -f "${EXECD_SRC}/Cargo.toml" ]; then
+        echo "ERROR: lib/bentos_execd/Cargo.toml not found at ${EXECD_SRC}"
+        exit 1
+    fi
+
+    mkdir -p "$EXECD_BIN_DIR"
+
+    # Cross-compile on the host using the installed musl toolchain.
+    # Requires: rustup target aarch64-unknown-linux-musl + musl-cross linker.
+    (cd "${EXECD_SRC}" && \
+        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc \
+        CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc \
+        cargo build --target aarch64-unknown-linux-musl --release 2>&1)
+
+    EXECD_BIN="${EXECD_SRC}/target/aarch64-unknown-linux-musl/release/bentos-execd"
+    if [ ! -f "$EXECD_BIN" ]; then
+        echo "ERROR: bentos-execd binary not found at ${EXECD_BIN}"
+        exit 1
+    fi
+
+    cp "$EXECD_BIN" "$EXECD_BIN_DIR/bentos-execd"
+    echo "bentos-execd compiled:"
+    ls -lh "$EXECD_BIN_DIR/"
+else
+    echo ""
+    echo "--- Stage 1.5: Skipping bentos-execd compile (--no-bentos) ---"
+    mkdir -p "$EXECD_BIN_DIR"
+fi
 
 if [ "$SKIP_BENTOS" = "false" ]; then
     echo ""
@@ -264,6 +304,20 @@ else
     echo "Skipping BentOS binaries (--no-bentos or binaries not found)"
 fi
 
+echo "--- Installing bentos-execd binary and OpenRC service ---"
+if [ "$SKIP_BENTOS" = "false" ] && [ -f /execd-bin/bentos-execd ]; then
+    mkdir -p "$ROOTFS/usr/sbin"
+    install -m 0755 /execd-bin/bentos-execd "$ROOTFS/usr/sbin/bentos-execd"
+    echo "Installed: /usr/sbin/bentos-execd ($(du -h /execd-bin/bentos-execd | cut -f1))"
+else
+    echo "Skipping bentos-execd binary (--no-bentos or binary not found)"
+fi
+
+if [ -f /configs/etc/init.d/bentos-execd ]; then
+    install -m 0755 /configs/etc/init.d/bentos-execd "$ROOTFS/etc/init.d/bentos-execd"
+    echo "Installed: /etc/init.d/bentos-execd"
+fi
+
 echo "--- Installing bentosd OpenRC service ---"
 if [ -f /configs/etc/init.d/bentosd ]; then
     install -m 0755 /configs/etc/init.d/bentosd "$ROOTFS/etc/init.d/bentosd"
@@ -284,6 +338,11 @@ chroot "$ROOTFS" rc-update add syslog boot 2>/dev/null || true
 
 chroot "$ROOTFS" rc-update add networking default 2>/dev/null || true
 chroot "$ROOTFS" rc-update add sshd default 2>/dev/null || true
+
+if [ -f "$ROOTFS/etc/init.d/bentos-execd" ] && [ "$SKIP_BENTOS" = "false" ]; then
+    chroot "$ROOTFS" rc-update add bentos-execd default 2>/dev/null || true
+    echo "Enabled: bentos-execd in default runlevel"
+fi
 
 if [ -f "$ROOTFS/etc/init.d/bentosd" ] && [ "$SKIP_BENTOS" = "false" ]; then
     chroot "$ROOTFS" rc-update add bentosd default 2>/dev/null || true
@@ -325,6 +384,7 @@ docker run --rm \
     -v "$OUTPUT_DIR/modules":/modules:ro \
     -v "$CONFIGS_DIR":/configs:ro \
     -v "$BENTOS_BINS_DIR":/bentos-bins:ro \
+    -v "$EXECD_BIN_DIR":/execd-bin:ro \
     alpine:${ALPINE_VERSION} \
     /bin/sh /build.sh
 

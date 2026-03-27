@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+
+name="bentos-execd"
+description="BentOS guest exec agent"
+command="/usr/sbin/bentos-execd"
+command_background=true
+pidfile="/run/bentos-execd.pid"
+output_log="/var/log/bentos-execd.log"
+error_log="/var/log/bentos-execd.log"
+
+depend() {
+    before bentosd
+    before networking
+    after localmount
+}
