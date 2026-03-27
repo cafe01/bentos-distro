@@ -75,25 +75,24 @@ Kernel must build before rootfs — the rootfs needs kernel modules from the ker
 
 ### Release Pipeline (Target Architecture)
 
-bentos-execd and bentosd are packages within the `bentos` monorepo, not separate repositories. CI triggers use path filters on the monorepo:
+Each upstream package (bentos-execd, bentosd) has its own repo and CI. When upstream CI succeeds, it sends a `repository_dispatch` event to bentos-distro, triggering an image rebuild with the latest binaries:
 
 ```
-[push to main]
-  paths: lib/bentos_execd/** ---\
-  paths: lib/bentosd/**     ----+--> [GitHub Actions] --> build kernel + rootfs
-  paths: lib/bentos_distro/**---/         |                 (arm64 + amd64)
-                                          |
-                                          v
-                                 [GitHub Releases]
-                                   bentos-v0.1.0-arm64.tar.gz
-                                   bentos-v0.1.0-amd64.tar.gz
-                                          |
-                                          v
-                               [bentos-vmm-* backends]
-                                 download on demand
+[bentos-execd CI succeeds] --repository_dispatch--\
+                                                   +--> [bentos-distro CI] --> build kernel + rootfs
+[bentosd CI succeeds] -------repository_dispatch--/            |                 (arm64 + amd64)
+                                                               |
+                                                               v
+                                                      [GitHub Releases]
+                                                        bentos-v0.1.0-arm64.tar.gz
+                                                        bentos-v0.1.0-amd64.tar.gz
+                                                               |
+                                                               v
+                                                    [bentos-vmm-* backends]
+                                                      download on demand
 ```
 
-When changes to bentos-execd, bentosd, or bentos_distro land on main, path-filtered CI triggers rebuild the image with the latest binaries. Images are published as versioned GitHub Releases.
+Cross-repo trigger: upstream repo CI posts `repository_dispatch` to bentos-distro on success. bentos-distro CI rebuilds the image and publishes as versioned GitHub Releases.
 
 ### VMM Image Consumption (Target Architecture)
 
@@ -286,7 +285,7 @@ From `vm.start()` to bentos-execd connected: under 2 seconds on Apple Silicon.
 
 ## What's Next
 
-- **CI Pipeline**: GitHub Actions workflow building arm64 images on push. Triggered by bentos-execd and bentosd changes.
+- **CI Pipeline**: GitHub Actions workflow building arm64 images. Triggered by `repository_dispatch` from upstream bentos-execd and bentosd repo CIs.
 - **amd64 Support**: x86-64 kernel (`bzImage`) + rootfs for bentos-vmm-linux (Cloud Hypervisor backend).
 - **Image Versioning**: Semantic versioned releases. `bentos-v0.1.0-arm64.tar.gz` containing kernel + rootfs.
 - **VMM Image Management**: `bentos-vmm images list/pull/current` — backends download images from releases instead of requiring local builds.
