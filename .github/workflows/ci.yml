@@ -1,0 +1,132 @@
+name: CI
+
+# Triggers:
+#   push to main       — build + publish GitHub Release
+#   pull_request       — build + upload artifacts (no release)
+#   repository_dispatch upstream-ci-success — rebuild after bentos-execd ships
+#
+# ARM64 runner note:
+#   GitHub-hosted ARM64 runners (ubuntu-24.04-arm) are available on Team/Enterprise plans.
+#   To use native ARM64 instead of QEMU, change runs-on to ubuntu-24.04-arm and remove
+#   the docker/setup-qemu-action step. QEMU is used here as the universal fallback.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  repository_dispatch:
+    types: [upstream-ci-success]
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # Nested checkout layout so build-rootfs.sh's `cd ../..` resolves correctly.
+      # build-rootfs.sh computes REPO_ROOT as $(cd DISTRO_ROOT/../.. && pwd).
+      # With DISTRO_ROOT=monorepo/lib/bentos_distro, ../.. = monorepo/ which has
+      # lib/bentos_execd, lib/bentosd, lib/bentos_fuse alongside as expected.
+
+      - name: Checkout bentos-distro
+        uses: actions/checkout@v4
+        with:
+          path: monorepo/lib/bentos_distro
+
+      - name: Checkout bentos-execd
+        uses: actions/checkout@v4
+        with:
+          repository: cafe01/bentos-execd
+          path: monorepo/lib/bentos_execd
+
+      - name: Checkout bentosd
+        uses: actions/checkout@v4
+        with:
+          repository: cafe01/bentosd
+          path: monorepo/lib/bentosd
+
+      - name: Checkout bentos_fuse
+        uses: actions/checkout@v4
+        with:
+          repository: cafe01/bentos_fuse
+          path: monorepo/lib/bentos_fuse
+
+      - name: Set up QEMU for linux/arm64
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install Rust toolchain with aarch64-musl target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Install musl cross-compiler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu musl-tools
+
+          # The build script expects aarch64-linux-musl-gcc. Ubuntu provides
+          # aarch64-linux-gnu-gcc (glibc) but not a musl-specific one.
+          # Install the prebuilt musl-cross toolchain from musl.cc.
+          MUSL_CROSS_URL="https://musl.cc/aarch64-linux-musl-cross.tgz"
+          curl -fsSL "$MUSL_CROSS_URL" | sudo tar -xz -C /usr/local
+          echo "/usr/local/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Build ARM64 image
+        run: |
+          cd "${{ github.workspace }}/monorepo/lib/bentos_distro"
+          chmod +x scripts/build-kernel.sh scripts/build-rootfs.sh scripts/build-image.sh
+          make arm64
+
+      - name: Compute artifact name
+        id: artifact
+        run: |
+          DATE=$(date -u +%Y%m%d)
+          NAME="bentos-alpine-6.12-arm64-${DATE}-${{ github.run_number }}"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "filename=${NAME}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Package artifacts
+        run: |
+          cd "${{ github.workspace }}/monorepo/lib/bentos_distro/output/arm64"
+          tar -czf "${{ github.workspace }}/${{ steps.artifact.outputs.filename }}" \
+            bentos-kernel-arm64 \
+            bentos-rootfs-arm64.img
+          echo "Packaged:"
+          ls -lh "${{ github.workspace }}/${{ steps.artifact.outputs.filename }}"
+
+      # Upload as workflow artifact on every run (useful for PRs and debugging)
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ steps.artifact.outputs.filename }}
+          retention-days: 7
+
+      # Publish GitHub Release only on push to main or repository_dispatch (not PRs)
+      - name: Create GitHub Release
+        if: github.event_name == 'push' || github.event_name == 'repository_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "BentOS ARM64 Image ${{ steps.artifact.outputs.name }}"
+          body: |
+            BentOS ARM64 image built from commit ${{ github.sha }}.
+
+            **Contents:**
+            - `bentos-kernel-arm64` — ARM64 Linux kernel (Alpine linux-virt base, BentOS config)
+            - `bentos-rootfs-arm64.img` — ext4 rootfs (Alpine + bentosd + bentos-execd)
+
+            **Usage:**
+            ```
+            POST /machines { boot: "https://github.com/cafe01/bentos-distro/releases/download/build-${{ github.run_number }}/${{ steps.artifact.outputs.filename }}" }
+            ```
+          files: ${{ steps.artifact.outputs.filename }}
+          token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,6 +1,6 @@
 # bentos-distro
 
-<!-- CI badge: add when GitHub Actions workflow ships (Track E — Distro CI Pipeline) -->
+[![CI](https://github.com/cafe01/bentos-distro/actions/workflows/ci.yml/badge.svg)](https://github.com/cafe01/bentos-distro/actions/workflows/ci.yml)
 
 BentOS machine image build system and release pipeline. Produces bootable Linux images (kernel + rootfs) for BentOS virtual machines — the substrate that AI agents inhabit.
 
@@ -33,7 +33,7 @@ Each pair is a complete machine. The VMM loads the kernel and presents the rootf
 | M2 — Kernel Modules | Done | Selective module install (CUSE, virtiofs, vsock) with depmod |
 | M3 — BentOS Binaries | Done | bentosd 7.0MB + bentos 6.4MB ARM64 AOT in rootfs, fuse3-libs, OpenRC service. S310 |
 | M6 — bentos-execd | Done | Rust binary baked into rootfs, OpenRC service at default runlevel. S313. (M4-M5 are bentos-vmm-macos milestones, not distro — numbering follows Track E sequence) |
-| CI Pipeline | Planned | GitHub Actions building both architectures on push |
+| CI Pipeline | Done | GitHub Actions: QEMU + ARM64 build, GitHub Releases on push to main. S315. |
 | amd64 Support | Planned | x86-64 kernel + rootfs for bentos-vmm-linux |
 | Image Versioning | Planned | Semantic versions, published as GitHub Releases |
 | Initramfs | Planned | Replace `/etc/modules` workaround with proper initramfs |
@@ -287,7 +287,6 @@ From `vm.start()` to bentos-execd connected: under 2 seconds on Apple Silicon.
 
 ## What's Next
 
-- **CI Pipeline**: GitHub Actions workflow building arm64 images. Triggered by `repository_dispatch` from upstream bentos-execd and bentosd repo CIs.
 - **amd64 Support**: x86-64 kernel (`bzImage`) + rootfs for bentos-vmm-linux (Cloud Hypervisor backend).
 - **Image Versioning**: Content-descriptive naming: `bentos-alpine-6.12-arm64-20260327-42.tar.gz` (distro + kernel + arch + date + build). GitHub Release tag = build key. Filename IS the metadata.
 - **VMM Image Management**: `bentos-vmm images list/pull/current` — backends download images from releases instead of requiring local builds.
