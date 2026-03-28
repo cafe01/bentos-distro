@@ -104,7 +104,9 @@ jobs:
           ls -lh "${{ github.workspace }}/${{ steps.artifact.outputs.filename }}"
 
       # Upload as workflow artifact on every run (useful for PRs and debugging)
+      # Skip in local act runs — ACTIONS_RUNTIME_TOKEN is not available locally
       - name: Upload build artifact
+        if: ${{ !env.ACT }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact.outputs.name }}
@@ -113,7 +115,7 @@ jobs:
 
       # Publish GitHub Release only on push to main or repository_dispatch (not PRs)
       - name: Create GitHub Release
-        if: github.event_name == 'push' || github.event_name == 'repository_dispatch'
+        if: (github.event_name == 'push' || github.event_name == 'repository_dispatch') && !env.ACT
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
