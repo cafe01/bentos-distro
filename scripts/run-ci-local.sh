@@ -23,7 +23,19 @@ if [[ ! -f "$SECRETS_FILE" ]]; then
   exit 1
 fi
 
-exec act push \
+# act --bind mounts the repo root as github.workspace. The workflow checks out
+# bentos_distro into path: monorepo/lib/bentos_distro, but with --bind act skips
+# the local-repo copy and leaves that path missing. Pre-create the symlink so
+# the build step's `cd "$GITHUB_WORKSPACE/monorepo/lib/bentos_distro"` resolves.
+# Sibling repos (execd, bentosd, fuse) are real clones done by checkout steps.
+SYMLINK="$REPO_ROOT/monorepo/lib/bentos_distro"
+mkdir -p "$REPO_ROOT/monorepo/lib"
+[[ -e "$SYMLINK" ]] || ln -s "$REPO_ROOT" "$SYMLINK"
+
+act push \
   --secret-file "$SECRETS_FILE" \
   --platform "ubuntu-latest=catthehacker/ubuntu:act-latest" \
+  --container-architecture linux/arm64 \
+  --container-options "--privileged" \
+  --bind \
   "$@"

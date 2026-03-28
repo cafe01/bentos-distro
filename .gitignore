@@ -1,2 +1,4 @@
 output/
 .secrets
+monorepo/
+*.tar.gz
