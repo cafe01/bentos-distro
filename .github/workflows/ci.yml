@@ -75,12 +75,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gcc-aarch64-linux-gnu musl-tools
 
-          # The build script expects aarch64-linux-musl-gcc. Ubuntu provides
-          # aarch64-linux-gnu-gcc (glibc) but not a musl-specific one.
-          # Install the prebuilt musl-cross toolchain from musl.cc.
-          MUSL_CROSS_URL="https://musl.cc/aarch64-linux-musl-cross.tgz"
-          curl -fsSL "$MUSL_CROSS_URL" | sudo tar -xz -C /usr/local
-          echo "/usr/local/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
+          # Rust's aarch64-unknown-linux-musl target bundles its own musl libc.
+          # It only needs a cross-linker. Symlink the glibc cross-compiler
+          # (already installed above) under the musl name that build-rootfs.sh expects.
+          sudo ln -s /usr/bin/aarch64-linux-gnu-gcc /usr/local/bin/aarch64-linux-musl-gcc
 
       - name: Build ARM64 image
         run: |
