@@ -123,9 +123,6 @@ if [ "$SKIP_BENTOS" = "false" ]; then
 set -e
 
 echo "Copying workspace to writable build dir..."
-mkdir -p /build
-# Copy workspace root pubspec + only the packages we need to compile bentosd
-cp /src/pubspec.yaml /build/
 mkdir -p /build/lib
 cp -r /src/lib/bentosd /build/lib/
 cp -r /src/lib/bentos_fuse /build/lib/
