@@ -40,18 +40,21 @@ jobs:
         with:
           repository: cafe01/bentos-execd
           path: monorepo/lib/bentos_execd
+          token: ${{ secrets.REPO_TOKEN }}
 
       - name: Checkout bentosd
         uses: actions/checkout@v4
         with:
           repository: cafe01/bentosd
           path: monorepo/lib/bentosd
+          token: ${{ secrets.REPO_TOKEN }}
 
       - name: Checkout bentos_fuse
         uses: actions/checkout@v4
         with:
           repository: cafe01/bentos_fuse
           path: monorepo/lib/bentos_fuse
+          token: ${{ secrets.REPO_TOKEN }}
 
       - name: Set up QEMU for linux/arm64
         uses: docker/setup-qemu-action@v3
