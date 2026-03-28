@@ -73,7 +73,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            gcc-aarch64-linux-gnu musl-tools
+            gcc-aarch64-linux-gnu musl-tools protobuf-compiler
 
           # Rust's aarch64-unknown-linux-musl target bundles its own musl libc.
           # It only needs a cross-linker. Symlink the glibc cross-compiler
