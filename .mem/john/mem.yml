@@ -1,15 +1,15 @@
 agent: john
 scope: bentos_distro
-session: 1
-updated: 2026-03-26
+session: 317
+updated: 2026-03-30
 
 edges:
   episodic:
-    - s310-nap.md: 1.0
-    - distro-build-state.md: 0.5
+    - distro-build-state.md: 0.9
+    - s310-nap.md: 0.1
 
   semantic:
-    - build-lessons.md: 0.9
+    - build-lessons.md: 0.8
 
   prospective:
-    - next-actions.md: 1.0
+    - next-actions.md: 0.85
