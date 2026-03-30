@@ -6,9 +6,8 @@ name: CI
 #   repository_dispatch upstream-ci-success — rebuild after bentos-execd ships
 #
 # ARM64 runner note:
-#   GitHub-hosted ARM64 runners (ubuntu-24.04-arm) are available on Team/Enterprise plans.
-#   To use native ARM64 instead of QEMU, change runs-on to ubuntu-24.04-arm and remove
-#   the docker/setup-qemu-action step. QEMU is used here as the universal fallback.
+#   Using native ARM64 runner (ubuntu-24.04-arm), free for public repos.
+#   No QEMU emulation needed — builds run natively.
 
 on:
   push:
@@ -20,7 +19,7 @@ on:
 
 jobs:
   build-arm64:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: write
 
@@ -56,11 +55,6 @@ jobs:
           path: monorepo/lib/bentos_fuse
           token: ${{ secrets.REPO_TOKEN }}
 
-      - name: Set up QEMU for linux/arm64
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -69,16 +63,15 @@ jobs:
         with:
           targets: aarch64-unknown-linux-musl
 
-      - name: Install musl cross-compiler
+      - name: Install musl toolchain
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            gcc-aarch64-linux-gnu musl-tools protobuf-compiler
+            musl-tools protobuf-compiler
 
-          # Rust's aarch64-unknown-linux-musl target bundles its own musl libc.
-          # It only needs a cross-linker. Symlink the glibc cross-compiler
-          # (already installed above) under the musl name that build-rootfs.sh expects.
-          sudo ln -s /usr/bin/aarch64-linux-gnu-gcc /usr/local/bin/aarch64-linux-musl-gcc
+          # On native ARM64, musl-tools provides musl-gcc. Symlink it under
+          # the name that build-rootfs.sh expects for the Rust musl linker.
+          sudo ln -s /usr/bin/musl-gcc /usr/local/bin/aarch64-linux-musl-gcc
 
       - name: Build ARM64 image
         run: |
