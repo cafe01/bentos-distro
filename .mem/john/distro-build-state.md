@@ -1,28 +1,34 @@
-# Distro Build State (S309)
+# Distro Build State (S317 final)
 
-## Completed — M0+M1+M2
-- **M0**: Kernel — Linux 6.12.77 LTS ARM64, from Alpine linux-virt config
-  - FUSE_FS=y, CUSE=m, VIRTIO_FS=m, VSOCKETS/VIRTIO_VSOCKETS=m
-  - GCC plugins disabled, module signing disabled
-  - USB/sound/DRM/wireless stripped
-  - Output: `lib/bentos_distro/output/arm64/bentos-kernel-arm64` (20MB, valid ARM64 Image)
-- **M1**: Rootfs — Alpine 3.21, ext4, 38MB shrunk
-  - alpine-base, bash, openssh-server, shadow, sudo, kmod
-  - Console on hvc0, DHCP on eth0, root password: bentos
-  - OpenRC services: sysinit/boot/default/shutdown all configured
-- **M2**: Kernel modules selectively installed on rootfs (7 modules)
-  - cuse, virtiofs, vsock, vmw_vsock_virtio_transport{,_common}, vsock_{diag,loopback}
-  - /etc/modules loads vsock + vmw_vsock_virtio_transport + cuse at boot
+## S317 Delivered (3 commits merged to main)
 
-## Artifact Locations
-- Kernel: `lib/bentos_distro/output/arm64/bentos-kernel-arm64`
-- Rootfs: `lib/bentos_distro/output/arm64/bentos-rootfs-arm64.img`
-- Full config: `lib/bentos_distro/output/arm64/bentos_defconfig_full`
+### 1. Native ARM64 CI (`e1fff96`)
+- Switched from QEMU emulation to `ubuntu-24.04-arm` runner (free for public repos)
+- Dropped `docker/setup-qemu-action` and `gcc-aarch64-linux-gnu` cross-compiler
+- Simplified musl toolchain: native `musl-gcc` replaces cross-compilation
+- Build time: 6h QEMU timeout → ~27 min native
+- CI is GREEN on GitHub Actions
 
-## For VMM Integration (successor handoff)
-- Kernel loaded via VZLinuxBootLoader(kernelURL:)
-- Rootfs presented as virtio-blk disk
-- Kernel cmdline: `console=hvc0 root=/dev/vda rw`
-- Root login: root / bentos
-- Successor spawns as john-vmm-swift-05 at lib/bentos_vmm_macos/ for e2e validation
-- Copy artifacts to .build/debug/, build+codesign Swift daemon, POST create+start VM
+### 2. `.actrc` for local CI (`7d9d4ef`)
+Three defaults: `--container-architecture linux/arm64`, `--bind`, runner image mapping.
+Local `act push` just works with no flags needed.
+
+### 3. README docs (`5460a7b`)
+Full "Running CI Locally" section: setup, explanation of each `.actrc` flag, alternatives.
+Pipeline status badge and architecture overview updated.
+
+## Squid Proxy (also S317, pre-commits)
+Fully operational: SSL bump, Docker proxy config, CA trust chain (macOS + OrbStack).
+Docker blob caching not yet effective (R2 CDN signed URLs). See infrastructure reference below.
+
+## Infrastructure Reference
+
+| Item | Location |
+|------|----------|
+| Squid config | `/opt/homebrew/etc/squid.conf` |
+| CA cert/key | `/opt/homebrew/etc/squid/ssl_cert/squid-ca.{crt,key}` |
+| Docker proxy | `~/.orbstack/config/docker.json` → `host.internal:3128` |
+| Squid logs | `/opt/homebrew/var/log/squid/access.log` |
+| CI workflow | `.github/workflows/ci.yml` |
+| Build output | `output/arm64/` |
+| `.actrc` | `lib/bentos_distro/.actrc` |
