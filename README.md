@@ -33,7 +33,7 @@ Each pair is a complete machine. The VMM loads the kernel and presents the rootf
 | M2 — Kernel Modules | Done | Selective module install (CUSE, virtiofs, vsock) with depmod |
 | M3 — BentOS Binaries | Done | bentosd 7.0MB + bentos 6.4MB ARM64 AOT in rootfs, fuse3-libs, OpenRC service. S310 |
 | M6 — bentos-execd | Done | Rust binary baked into rootfs, OpenRC service at default runlevel. S313. (M4-M5 are bentos-vmm-macos milestones, not distro — numbering follows Track E sequence) |
-| CI Pipeline | Done | GitHub Actions: QEMU + ARM64 build, GitHub Releases on push to main. S315. |
+| CI Pipeline | Done | GitHub Actions on native ARM64 runner, GitHub Releases on push to main. S315/S317. |
 | amd64 Support | Planned | x86-64 kernel + rootfs for bentos-vmm-linux |
 | Image Versioning | Planned | Semantic versions, published as GitHub Releases |
 | Initramfs | Planned | Replace `/etc/modules` workaround with proper initramfs |
@@ -259,6 +259,63 @@ output/arm64/
 +-- bentos-bins/                 # Dart AOT binaries (intermediate)
 +-- bentos-execd-bin/            # Rust binary (intermediate)
 ```
+
+## Running CI Locally
+
+The full GitHub Actions workflow runs locally via [act](https://github.com/nektos/act). The `.actrc` file in this directory provides the default flags, so running CI is just:
+
+```bash
+cd lib/bentos_distro
+act push --secret-file .secrets
+```
+
+### Setup
+
+```bash
+# Install act
+brew install act
+
+# Create .secrets (gitignored) — both tokens needed for cross-repo checkout steps
+cat > .secrets <<EOF
+REPO_TOKEN=$(gh auth token)
+GITHUB_TOKEN=$(gh auth token)
+EOF
+```
+
+### What `.actrc` does
+
+The `.actrc` file configures act with three flags that would otherwise need to be passed every time:
+
+```
+--container-architecture linux/arm64     # ARM64 containers (native on Apple Silicon)
+--bind                                   # Bind-mount workspace instead of copy (fixes DinD volume paths)
+-P ubuntu-24.04-arm=catthehacker/ubuntu:act-22.04   # Map the ARM64 runner to a compatible image
+```
+
+**Why `--bind`?** Without it, act copies the workspace into the container. Inner Docker containers (kernel/rootfs builds) then can't resolve volume mount paths because they reference host paths that don't exist inside the act container. `--bind` makes paths consistent across all layers.
+
+### Alternative: `run-ci-local.sh`
+
+For more control, `scripts/run-ci-local.sh` wraps act with additional setup (creates the `monorepo/` symlink structure that the workflow's checkout steps expect):
+
+```bash
+# Full build
+./scripts/run-ci-local.sh
+
+# Dry run (parse workflow, don't execute)
+./scripts/run-ci-local.sh --dryrun
+
+# Run specific job
+./scripts/run-ci-local.sh -j build-arm64
+```
+
+### Local CI Notes
+
+- Full pipeline takes ~9 minutes on Apple Silicon
+- Requires Docker running (OrbStack or Docker Desktop)
+- The `monorepo/` directory created during runs is gitignored
+- `upload-artifact` and `gh-release` steps are skipped locally (guarded by `!env.ACT`)
+- Build artifacts land in `output/arm64/` and a tarball in the repo root (both gitignored)
 
 ## Boot Sequence
 
