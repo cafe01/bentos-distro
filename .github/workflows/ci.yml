@@ -5,9 +5,7 @@ name: CI
 #   pull_request       — build + upload artifacts (no release)
 #   repository_dispatch upstream-ci-success — rebuild after bentos-execd ships
 #
-# ARM64 runner note:
-#   Using native ARM64 runner (ubuntu-24.04-arm), free for public repos.
-#   No QEMU emulation needed — builds run natively.
+# Dual-architecture: ARM64 on native runner, AMD64 on standard runner.
 
 on:
   push:
@@ -106,23 +104,136 @@ jobs:
           path: ${{ steps.artifact.outputs.filename }}
           retention-days: 7
 
-      # Publish GitHub Release only on push to main or repository_dispatch (not PRs)
+  build-amd64:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout bentos-distro
+        uses: actions/checkout@v4
+        with:
+          path: monorepo/lib/bentos_distro
+
+      - name: Checkout bentos-execd
+        uses: actions/checkout@v4
+        with:
+          repository: cafe01/bentos-execd
+          path: monorepo/lib/bentos_execd
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Checkout bentosd
+        uses: actions/checkout@v4
+        with:
+          repository: cafe01/bentosd
+          path: monorepo/lib/bentosd
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Checkout bentos_fuse
+        uses: actions/checkout@v4
+        with:
+          repository: cafe01/bentos_fuse
+          path: monorepo/lib/bentos_fuse
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install Rust toolchain with x86_64-musl target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            musl-tools protobuf-compiler
+
+          # On native x86_64, musl-tools provides musl-gcc. Symlink it under
+          # the name that build-rootfs.sh expects for the Rust musl linker.
+          sudo ln -s /usr/bin/musl-gcc /usr/local/bin/x86_64-linux-musl-gcc
+
+      - name: Build AMD64 image
+        run: |
+          cd "${{ github.workspace }}/monorepo/lib/bentos_distro"
+          chmod +x scripts/build-kernel.sh scripts/build-rootfs.sh scripts/build-image.sh
+          make amd64
+
+      - name: Compute artifact name
+        id: artifact
+        run: |
+          DATE=$(date -u +%Y%m%d)
+          NAME="bentos-alpine-6.12-amd64-${DATE}-${{ github.run_number }}"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "filename=${NAME}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Package artifacts
+        run: |
+          cd "${{ github.workspace }}/monorepo/lib/bentos_distro/output/amd64"
+          tar -czf "${{ github.workspace }}/${{ steps.artifact.outputs.filename }}" \
+            bentos-kernel-amd64 \
+            bentos-rootfs-amd64.img
+          echo "Packaged:"
+          ls -lh "${{ github.workspace }}/${{ steps.artifact.outputs.filename }}"
+
+      - name: Upload build artifact
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ steps.artifact.outputs.filename }}
+          retention-days: 7
+
+  release:
+    if: (github.event_name == 'push' || github.event_name == 'repository_dispatch')
+    needs: [build-arm64, build-amd64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Gather release files
+        id: release
+        run: |
+          # Find all tarballs from both architecture builds
+          FILES=$(find artifacts/ -name '*.tar.gz' -type f | tr '\n' ',')
+          FILES="${FILES%,}"  # trim trailing comma
+          echo "files=${FILES}" >> "$GITHUB_OUTPUT"
+
+          # List what we found
+          echo "Release artifacts:"
+          find artifacts/ -name '*.tar.gz' -type f -exec ls -lh {} \;
+
       - name: Create GitHub Release
-        if: (github.event_name == 'push' || github.event_name == 'repository_dispatch') && !env.ACT
+        if: ${{ !env.ACT }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: "BentOS ARM64 Image ${{ steps.artifact.outputs.name }}"
+          name: "BentOS Images build-${{ github.run_number }}"
           body: |
-            BentOS ARM64 image built from commit ${{ github.sha }}.
+            BentOS multi-architecture images built from commit ${{ github.sha }}.
 
-            **Contents:**
+            **ARM64 (macOS / Apple Silicon):**
             - `bentos-kernel-arm64` — ARM64 Linux kernel (Alpine linux-virt base, BentOS config)
             - `bentos-rootfs-arm64.img` — ext4 rootfs (Alpine + bentosd + bentos-execd)
 
+            **AMD64 (Linux / x86_64):**
+            - `bentos-kernel-amd64` — x86_64 Linux kernel (bzImage, Alpine linux-virt base, BentOS config)
+            - `bentos-rootfs-amd64.img` — ext4 rootfs (Alpine + bentosd + bentos-execd)
+
             **Usage:**
             ```
-            POST /machines { boot: "https://github.com/cafe01/bentos-distro/releases/download/build-${{ github.run_number }}/${{ steps.artifact.outputs.filename }}" }
+            # ARM64
+            POST /machines { boot: "https://github.com/cafe01/bentos-distro/releases/download/build-${{ github.run_number }}/bentos-alpine-6.12-arm64-YYYYMMDD-${{ github.run_number }}.tar.gz" }
+
+            # AMD64
+            POST /machines { boot: "https://github.com/cafe01/bentos-distro/releases/download/build-${{ github.run_number }}/bentos-alpine-6.12-amd64-YYYYMMDD-${{ github.run_number }}.tar.gz" }
             ```
-          files: ${{ steps.artifact.outputs.filename }}
+          files: artifacts/**/*.tar.gz
           token: ${{ secrets.GITHUB_TOKEN }}

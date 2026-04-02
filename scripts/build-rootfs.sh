@@ -1,20 +1,23 @@
 #!/bin/bash
 set -euo pipefail
 
-# Build BentOS ARM64 rootfs inside Docker.
+# Build BentOS rootfs inside Docker.
 # Produces an ext4 image with Alpine base + kernel modules + BentOS binaries.
-# Requires: kernel modules from build-kernel.sh in output/arm64/modules/
+# Supports arm64 (Apple Silicon) and amd64 (x86_64) targets.
+# Requires: kernel modules from build-kernel.sh in output/{arch}/modules/
 #
-# Usage: ./scripts/build-rootfs.sh [--output DIR] [--size SIZE_MB] [--no-bentos]
-#   --output DIR     Output directory (default: output/arm64)
+# Usage: ./scripts/build-rootfs.sh [--arch ARCH] [--output DIR] [--size SIZE_MB] [--no-bentos]
+#   --arch ARCH      Target architecture: arm64 (default) or amd64
+#   --output DIR     Output directory (default: output/{arch})
 #   --size SIZE_MB   Rootfs image size in MB (default: 256)
 #   --no-bentos      Skip BentOS binary compile stage (for fast iteration)
-# Output: DIR/bentos-rootfs-arm64.img
+# Output: DIR/bentos-rootfs-{arch}.img
 
 DISTRO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Repo root: two levels up from lib/bentos_distro
 REPO_ROOT="$(cd "${DISTRO_ROOT}/../.." && pwd)"
-OUTPUT_DIR="${DISTRO_ROOT}/output/arm64"
+TARGET_ARCH="arm64"
+OUTPUT_DIR=""
 CONFIGS_DIR="${DISTRO_ROOT}/configs"
 ALPINE_VERSION="3.21"
 ROOTFS_SIZE_MB=256
@@ -24,6 +27,7 @@ DART_CONTAINER_NAME="bentos-dart-build"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --arch) TARGET_ARCH="$2"; shift 2 ;;
         --output) OUTPUT_DIR="$2"; shift 2 ;;
         --size) ROOTFS_SIZE_MB="$2"; shift 2 ;;
         --no-bentos) SKIP_BENTOS=true; shift ;;
@@ -31,37 +35,67 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Architecture-specific mappings
+case "$TARGET_ARCH" in
+    arm64)
+        DOCKER_PLATFORM="linux/arm64"
+        APK_ARCH="aarch64"
+        RUST_TARGET="aarch64-unknown-linux-musl"
+        RUST_LINKER="aarch64-linux-musl-gcc"
+        CARGO_TARGET_ENV="CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER"
+        CC_TARGET_ENV="CC_aarch64_unknown_linux_musl"
+        ROOTFS_OUTPUT="bentos-rootfs-arm64.img"
+        CONSOLE_DEVICE="hvc0"
+        ;;
+    amd64)
+        DOCKER_PLATFORM="linux/amd64"
+        APK_ARCH="x86_64"
+        RUST_TARGET="x86_64-unknown-linux-musl"
+        RUST_LINKER="x86_64-linux-musl-gcc"
+        CARGO_TARGET_ENV="CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER"
+        CC_TARGET_ENV="CC_x86_64_unknown_linux_musl"
+        ROOTFS_OUTPUT="bentos-rootfs-amd64.img"
+        CONSOLE_DEVICE="ttyS0"
+        ;;
+    *)
+        echo "ERROR: Unsupported architecture: $TARGET_ARCH (use arm64 or amd64)"
+        exit 1
+        ;;
+esac
+
+OUTPUT_DIR="${OUTPUT_DIR:-${DISTRO_ROOT}/output/${TARGET_ARCH}}"
 mkdir -p "$OUTPUT_DIR"
 
 # Check kernel modules exist
 if [ ! -d "$OUTPUT_DIR/modules/lib/modules" ]; then
     echo "ERROR: Kernel modules not found at $OUTPUT_DIR/modules/lib/modules/"
-    echo "Run build-kernel.sh first."
+    echo "Run build-kernel.sh --arch $TARGET_ARCH first."
     exit 1
 fi
 
-echo "=== BentOS Rootfs Build (ARM64) ==="
+echo "=== BentOS Rootfs Build (${TARGET_ARCH}) ==="
 echo "Alpine version: ${ALPINE_VERSION}"
+echo "Docker platform: ${DOCKER_PLATFORM}"
 echo "Rootfs size: ${ROOTFS_SIZE_MB}MB"
 echo "Output: ${OUTPUT_DIR}"
 echo "Skip BentOS: ${SKIP_BENTOS}"
 
 # ---------------------------------------------------------------------------
-# Stage 1: Compile BentOS Dart binaries (ARM64)
+# Stage 1: Compile BentOS Dart binaries
 # ---------------------------------------------------------------------------
 
 BENTOS_BINS_DIR="${OUTPUT_DIR}/bentos-bins"
 EXECD_BIN_DIR="${OUTPUT_DIR}/bentos-execd-bin"
 
 # ---------------------------------------------------------------------------
-# Stage 1.5: Compile bentos-execd Rust binary (ARM64 musl)
+# Stage 1.5: Compile bentos-execd Rust binary (musl static)
 # ---------------------------------------------------------------------------
 
 EXECD_SRC="${REPO_ROOT}/lib/bentos_execd"
 
 if [ "$SKIP_BENTOS" = "false" ]; then
     echo ""
-    echo "--- Stage 1.5: Compiling bentos-execd (ARM64 musl) ---"
+    echo "--- Stage 1.5: Compiling bentos-execd (${TARGET_ARCH} musl) ---"
 
     if [ ! -f "${EXECD_SRC}/Cargo.toml" ]; then
         echo "ERROR: lib/bentos_execd/Cargo.toml not found at ${EXECD_SRC}"
@@ -70,14 +104,15 @@ if [ "$SKIP_BENTOS" = "false" ]; then
 
     mkdir -p "$EXECD_BIN_DIR"
 
-    # Cross-compile on the host using the installed musl toolchain.
-    # Requires: rustup target aarch64-unknown-linux-musl + musl-cross linker.
+    # Compile on the host using the installed musl toolchain.
+    # On native arch (arm64 on Apple Silicon, amd64 on x86_64 runner),
+    # this compiles natively with musl libc for a static binary.
     (cd "${EXECD_SRC}" && \
-        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc \
-        CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc \
-        cargo build --target aarch64-unknown-linux-musl --release 2>&1)
+        export "${CARGO_TARGET_ENV}=${RUST_LINKER}" && \
+        export "${CC_TARGET_ENV}=${RUST_LINKER}" && \
+        cargo build --target "$RUST_TARGET" --release 2>&1)
 
-    EXECD_BIN="${EXECD_SRC}/target/aarch64-unknown-linux-musl/release/bentos-execd"
+    EXECD_BIN="${EXECD_SRC}/target/${RUST_TARGET}/release/bentos-execd"
     if [ ! -f "$EXECD_BIN" ]; then
         echo "ERROR: bentos-execd binary not found at ${EXECD_BIN}"
         exit 1
@@ -94,7 +129,7 @@ fi
 
 if [ "$SKIP_BENTOS" = "false" ]; then
     echo ""
-    echo "--- Stage 1: Compiling BentOS Dart binaries (ARM64) ---"
+    echo "--- Stage 1: Compiling BentOS Dart binaries (${TARGET_ARCH}) ---"
 
     # bentosd source is at lib/bentosd relative to the repo root.
     BENTOSD_SRC="${REPO_ROOT}/lib/bentosd"
@@ -109,13 +144,13 @@ if [ "$SKIP_BENTOS" = "false" ]; then
     mkdir -p "$BENTOS_BINS_DIR"
     docker rm -f "$DART_CONTAINER_NAME" 2>/dev/null || true
 
-    # Use official Dart image on linux/arm64.
+    # Use official Dart image on target platform.
     # Mount the repo root read-only as /src; copy the needed packages to a
     # writable /build directory so dart pub get can write .dart_tool/.
     # dart compile exe produces a self-contained AOT binary (embeds Dart runtime).
     docker run --rm \
         --name "$DART_CONTAINER_NAME" \
-        --platform linux/arm64 \
+        --platform "$DOCKER_PLATFORM" \
         -v "${REPO_ROOT}":/src:ro \
         -v "${BENTOS_BINS_DIR}":/output \
         dart:stable \
@@ -176,9 +211,11 @@ set -eu
 
 ALPINE_VERSION="3.21"
 ROOTFS="/tmp/rootfs"
-IMG="/output/bentos-rootfs-arm64.img"
+IMG="/output/${ROOTFS_OUTPUT}"
 ROOTFS_SIZE_MB="${ROOTFS_SIZE_MB:-256}"
 SKIP_BENTOS="${SKIP_BENTOS:-false}"
+APK_ARCH="${APK_ARCH}"
+CONSOLE_DEVICE="${CONSOLE_DEVICE}"
 REPO_MAIN="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/main"
 REPO_COMMUNITY="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/community"
 
@@ -193,8 +230,8 @@ echo "--- Mounting rootfs ---"
 mkdir -p "$ROOTFS"
 mount -o loop "$IMG" "$ROOTFS"
 
-echo "--- Installing Alpine base packages ---"
-apk --root "$ROOTFS" --initdb --arch aarch64 \
+echo "--- Installing Alpine base packages (${APK_ARCH}) ---"
+apk --root "$ROOTFS" --initdb --arch "$APK_ARCH" \
     --repository "$REPO_MAIN" \
     --repository "$REPO_COMMUNITY" \
     --allow-untrusted \
@@ -224,12 +261,14 @@ cp /configs/etc/network/interfaces "$ROOTFS/etc/network/interfaces"
 # DNS (not in configs/ — generated)
 echo "nameserver 8.8.8.8" > "$ROOTFS/etc/resolv.conf"
 
-# Inittab — getty on hvc0 (VZ.fw virtio-console)
-cat > "$ROOTFS/etc/inittab" << 'EOF'
+# Inittab — getty on architecture-appropriate console device
+# arm64 (VZ.fw): hvc0 (virtio-console)
+# amd64 (Cloud Hypervisor): ttyS0 (serial console)
+cat > "$ROOTFS/etc/inittab" << EOF
 ::sysinit:/sbin/openrc sysinit
 ::sysinit:/sbin/openrc boot
 ::wait:/sbin/openrc default
-hvc0::respawn:/sbin/getty 38400 hvc0
+${CONSOLE_DEVICE}::respawn:/sbin/getty 38400 ${CONSOLE_DEVICE}
 ::ctrlaltdel:/sbin/reboot
 ::shutdown:/sbin/openrc shutdown
 EOF
@@ -372,10 +411,13 @@ chmod +x /tmp/bentos-rootfs-build.sh
 echo "--- Starting rootfs Docker build ---"
 docker run --rm \
     --name "$CONTAINER_NAME" \
-    --platform linux/arm64 \
+    --platform "$DOCKER_PLATFORM" \
     --privileged \
     -e "ROOTFS_SIZE_MB=${ROOTFS_SIZE_MB}" \
     -e "SKIP_BENTOS=${SKIP_BENTOS}" \
+    -e "APK_ARCH=${APK_ARCH}" \
+    -e "CONSOLE_DEVICE=${CONSOLE_DEVICE}" \
+    -e "ROOTFS_OUTPUT=${ROOTFS_OUTPUT}" \
     -v /tmp/bentos-rootfs-build.sh:/build.sh:ro \
     -v "$OUTPUT_DIR":/output \
     -v "$OUTPUT_DIR/modules":/modules:ro \
@@ -387,4 +429,4 @@ docker run --rm \
 
 echo ""
 echo "=== Output ==="
-ls -la "$OUTPUT_DIR"/bentos-rootfs-arm64.img 2>/dev/null && echo "Rootfs image ready." || echo "ERROR: Rootfs image not found"
+ls -la "$OUTPUT_DIR"/${ROOTFS_OUTPUT} 2>/dev/null && echo "Rootfs image ready." || echo "ERROR: Rootfs image not found"

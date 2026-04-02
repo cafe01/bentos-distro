@@ -17,12 +17,12 @@ output/
 +-- arm64/
 |   +-- bentos-kernel-arm64           Kernel Image for VZ.fw (bentos-vmm-macos)
 |   +-- bentos-rootfs-arm64.img       ext4 rootfs (golden image)
-+-- x86_64/                           (planned)
-    +-- bentos-kernel-x86_64.bzImage  Kernel for Cloud Hypervisor (bentos-vmm-linux)
-    +-- bentos-rootfs-x86_64.img      ext4 rootfs (golden image)
++-- amd64/
+    +-- bentos-kernel-amd64           Kernel bzImage for Cloud Hypervisor (bentos-vmm-linux)
+    +-- bentos-rootfs-amd64.img       ext4 rootfs (golden image)
 ```
 
-Each pair is a complete machine. The VMM loads the kernel and presents the rootfs as a virtio-blk disk. ARM64 (macOS on Apple Silicon) is built and tested. x86-64 follows when bentos-vmm-linux ships.
+Each pair is a complete machine. The VMM loads the kernel and presents the rootfs as a virtio-blk disk. Both ARM64 (macOS on Apple Silicon) and AMD64 (Linux x86_64) are built by CI.
 
 ## Current State
 
@@ -34,7 +34,7 @@ Each pair is a complete machine. The VMM loads the kernel and presents the rootf
 | M3 — BentOS Binaries | Done | bentosd 7.0MB + bentos 6.4MB ARM64 AOT in rootfs, fuse3-libs, OpenRC service. S310 |
 | M6 — bentos-execd | Done | Rust binary baked into rootfs, OpenRC service at default runlevel. S313. (M4-M5 are bentos-vmm-macos milestones, not distro — numbering follows Track E sequence) |
 | CI Pipeline | Done | GitHub Actions on native ARM64 runner, GitHub Releases on push to main. S315/S317. |
-| amd64 Support | Planned | x86-64 kernel + rootfs for bentos-vmm-linux |
+| amd64 Support | Done | x86-64 kernel + rootfs for bentos-vmm-linux. Build scripts parameterized, CI dual-arch. S328. |
 | Image Versioning | Planned | Semantic versions, published as GitHub Releases |
 | Initramfs | Planned | Replace `/etc/modules` workaround with proper initramfs |
 
@@ -46,17 +46,21 @@ Three scripts, one orchestrator:
 
 | Script | What It Does |
 |--------|-------------|
-| `scripts/build-kernel.sh` | Builds ARM64 kernel inside Docker from Alpine linux-virt source. Applies BentOS config (FUSE built-in, CUSE module, VIRTIO_VSOCK built-in, virtiofs module). Outputs kernel Image + modules. |
-| `scripts/build-rootfs.sh` | Two-stage build. Stage 1: cross-compiles bentos-execd (Rust/musl) and bentosd (Dart AOT) for ARM64. Stage 2: assembles ext4 rootfs in Docker — Alpine packages, kernel modules, BentOS binaries, system config. |
-| `scripts/build-image.sh` | Orchestrator. Runs kernel then rootfs in sequence. |
+| `scripts/build-kernel.sh` | Builds kernel inside Docker from Alpine linux-virt source. Applies BentOS config (FUSE built-in, CUSE module, VIRTIO_VSOCK built-in, virtiofs module). Outputs kernel image + modules. Supports `--arch arm64/amd64`. |
+| `scripts/build-rootfs.sh` | Two-stage build. Stage 1: compiles bentos-execd (Rust/musl) and bentosd (Dart AOT). Stage 2: assembles ext4 rootfs in Docker — Alpine packages, kernel modules, BentOS binaries, system config. Supports `--arch arm64/amd64`. |
+| `scripts/build-image.sh` | Orchestrator. Runs kernel then rootfs in sequence. Supports `--arch arm64/amd64`. |
 
-All builds run inside Docker containers on `linux/arm64` for reproducibility. The host (macOS) never touches the target filesystem directly.
+All builds run inside Docker containers on the target platform for reproducibility. The host never touches the target filesystem directly.
 
 ```
 Makefile targets:
-  make arm64          # full build (kernel + rootfs)
-  make kernel-arm64   # kernel only
-  make rootfs-arm64   # rootfs only (requires kernel built first)
+  make arm64          # full ARM64 build (kernel + rootfs)
+  make kernel-arm64   # ARM64 kernel only
+  make rootfs-arm64   # ARM64 rootfs only (requires kernel built first)
+  make amd64          # full AMD64 build (kernel + rootfs)
+  make kernel-amd64   # AMD64 kernel only
+  make rootfs-amd64   # AMD64 rootfs only (requires kernel built first)
+  make all            # both architectures
   make clean          # remove output/
 ```
 
@@ -134,7 +138,7 @@ Custom Linux kernel compiled from Alpine's `linux-virt` source. The delta from s
 
 Everything else inherited from `linux-virt`: virtio drivers (blk, net, console, rng), namespaces, cgroups, seccomp, overlayfs, ext4. Physical hardware drivers stripped.
 
-| Property | ARM64 | x86-64 (planned) |
+| Property | ARM64 | AMD64 |
 |----------|-------|--------|
 | Source | Alpine `linux-virt` | Alpine `linux-virt` |
 | Format | Uncompressed `Image` | `bzImage` |
@@ -206,45 +210,53 @@ configs/
 
 ## Building Locally
 
-**Prerequisites:** Docker (with `linux/arm64` platform support — native on Apple Silicon, QEMU on x86).
+**Prerequisites:** Docker (with multi-platform support — `linux/arm64` native on Apple Silicon, `linux/amd64` native on x86_64).
 
 ### Full Image Build
 
 ```bash
 cd lib/bentos_distro
 
-# Build everything: kernel + rootfs (includes bentos-execd and bentosd compilation)
-bash scripts/build-image.sh
-
-# Or via Make
+# Build ARM64 (default — native on Apple Silicon)
 make arm64
+
+# Build AMD64
+make amd64
+
+# Build both architectures
+make all
+
+# Or directly with arch flag
+bash scripts/build-image.sh --arch amd64
 ```
 
 ### Individual Steps
 
 ```bash
 # Kernel only (must run first — rootfs depends on modules)
-bash scripts/build-kernel.sh
+bash scripts/build-kernel.sh --arch arm64
+bash scripts/build-kernel.sh --arch amd64
 
-# Rootfs only (requires kernel modules in output/arm64/modules/)
-bash scripts/build-rootfs.sh
+# Rootfs only (requires kernel modules)
+bash scripts/build-rootfs.sh --arch arm64
+bash scripts/build-rootfs.sh --arch amd64
 
 # Rootfs without BentOS binaries (fast iteration on Alpine config)
-bash scripts/build-rootfs.sh --no-bentos
+bash scripts/build-rootfs.sh --arch arm64 --no-bentos
 
 # Custom output directory
-bash scripts/build-image.sh --output /tmp/bentos-build
+bash scripts/build-image.sh --arch amd64 --output /tmp/bentos-build
 
 # Custom rootfs size
-bash scripts/build-rootfs.sh --size 512
+bash scripts/build-rootfs.sh --arch arm64 --size 512
 ```
 
 ### Build Requirements for BentOS Binaries
 
 The rootfs build compiles BentOS binaries inside Docker:
 
-- **bentos-execd**: Requires Rust with `aarch64-unknown-linux-musl` target and musl-cross linker on the host (cross-compiled outside Docker).
-- **bentosd / bentos**: Compiled inside a `dart:stable` Docker container targeting `linux/arm64`.
+- **bentos-execd**: Requires Rust with target arch musl target (`aarch64-unknown-linux-musl` or `x86_64-unknown-linux-musl`) and musl linker on the host.
+- **bentosd / bentos**: Compiled inside a `dart:stable` Docker container targeting the appropriate platform.
 
 Use `--no-bentos` to skip binary compilation when iterating on the base image.
 
@@ -254,6 +266,13 @@ Use `--no-bentos` to skip binary compilation when iterating on the base image.
 output/arm64/
 +-- bentos-kernel-arm64          # Kernel Image (~19 MB)
 +-- bentos-rootfs-arm64.img      # ext4 rootfs (~38 MB)
++-- bentos_defconfig_full        # Full kernel .config for reference
++-- modules/                     # Kernel modules (consumed by rootfs build)
++-- bentos-bins/                 # Dart AOT binaries (intermediate)
++-- bentos-execd-bin/            # Rust binary (intermediate)
+output/amd64/
++-- bentos-kernel-amd64          # Kernel bzImage (~5-10 MB)
++-- bentos-rootfs-amd64.img      # ext4 rootfs (~38 MB)
 +-- bentos_defconfig_full        # Full kernel .config for reference
 +-- modules/                     # Kernel modules (consumed by rootfs build)
 +-- bentos-bins/                 # Dart AOT binaries (intermediate)
@@ -315,7 +334,7 @@ For more control, `scripts/run-ci-local.sh` wraps act with additional setup (cre
 - Requires Docker running (OrbStack or Docker Desktop)
 - The `monorepo/` directory created during runs is gitignored
 - `upload-artifact` and `gh-release` steps are skipped locally (guarded by `!env.ACT`)
-- Build artifacts land in `output/arm64/` and a tarball in the repo root (both gitignored)
+- Build artifacts land in `output/{arm64,amd64}/` and tarballs in the repo root (both gitignored)
 
 ## Boot Sequence
 
@@ -344,8 +363,7 @@ From `vm.start()` to bentos-execd connected: under 2 seconds on Apple Silicon.
 
 ## What's Next
 
-- **amd64 Support**: x86-64 kernel (`bzImage`) + rootfs for bentos-vmm-linux (Cloud Hypervisor backend).
-- **Image Versioning**: Content-descriptive naming: `bentos-alpine-6.12-arm64-20260327-42.tar.gz` (distro + kernel + arch + date + build). GitHub Release tag = build key. Filename IS the metadata.
+- **Image Versioning**: Content-descriptive naming: `bentos-alpine-6.12-{arch}-20260327-42.tar.gz` (distro + kernel + arch + date + build). GitHub Release tag = build key. Filename IS the metadata.
 - **VMM Image Management**: `bentos-vmm images list/pull/current` — backends download images from releases instead of requiring local builds.
 - **Initramfs**: Replace the `/etc/modules` workaround with a proper initramfs for cleaner module loading.
 - **Full BentOS Rootfs**: Container runtime (containerd + runc), agent user model (`/etc/skel/`, `/home/alfred/`), `bentos-agent` binary.
