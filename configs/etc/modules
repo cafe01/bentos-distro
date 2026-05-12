@@ -1,4 +1,4 @@
-vsock
-vmw_vsock_virtio_transport
-cuse
-virtio_net
+# Intentionally empty — BentOS kernel is all-builtin.
+# vsock, virtio_net, cuse, virtiofs are =y in the kernel config.
+# If a runtime-loadable module is ever shipped, list it here and restore
+# the module-install + 'modules' OpenRC service in build-rootfs.sh.

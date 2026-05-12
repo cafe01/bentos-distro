@@ -116,18 +116,24 @@ else
     make ARCH="$MAKE_ARCH" defconfig
 fi
 
-# BentOS-specific config changes
-./scripts/config --enable FUSE_FS           # =y built-in (bentosd depends on it)
-./scripts/config --module CUSE              # =m module (loaded via /etc/modules)
-./scripts/config --enable VIRTIO_VSOCK      # =y built-in (control plane)
-./scripts/config --module VIRTIO_FS         # =m module (virtiofs, on demand)
+# BentOS-specific config changes — everything we need is built-in.
+# Custom kernel philosophy: include exactly what we ship, nothing more.
+# No /lib/modules in the rootfs; no modprobe ceremony at boot.
+./scripts/config --enable FUSE_FS           # =y bentosd depends on it
+./scripts/config --enable CUSE              # =y /dev/cuse for device nodes
+./scripts/config --enable VIRTIO_VSOCK      # =y control plane (guest <-> host)
+./scripts/config --enable VIRTIO_FS         # =y host filesystem sharing
+./scripts/config --enable VIRTIO_NET        # =y networking (was implicit module, now explicit built-in)
 
-# Verify virtio essentials
+# Verify virtio essentials — promote anything still =m to =y (custom-kernel posture)
 for opt in VIRTIO VIRTIO_PCI VIRTIO_MMIO VIRTIO_BLK VIRTIO_NET VIRTIO_CONSOLE \
            HW_RANDOM_VIRTIO EXT4_FS TMPFS DEVTMPFS NAMESPACES CGROUPS SECCOMP OVERLAY_FS; do
     state=$(./scripts/config --state "CONFIG_$opt" 2>/dev/null || echo "n")
     if [ "$state" = "n" ]; then
-        echo "WARNING: CONFIG_$opt not enabled, enabling..."
+        echo "WARNING: CONFIG_$opt not enabled, enabling as built-in..."
+        ./scripts/config --enable "$opt"
+    elif [ "$state" = "m" ]; then
+        echo "  CONFIG_$opt = m -> promoting to y (built-in)"
         ./scripts/config --enable "$opt"
     else
         echo "  CONFIG_$opt = $state"
@@ -161,10 +167,12 @@ ls -la "$KERNEL_IMAGE"
 file "$KERNEL_IMAGE"
 
 echo "--- Config verification ---"
-echo "FUSE_FS: $(./scripts/config --file .config --state CONFIG_FUSE_FS)"
-echo "CUSE: $(./scripts/config --file .config --state CONFIG_CUSE)"
+echo "FUSE_FS:      $(./scripts/config --file .config --state CONFIG_FUSE_FS)"
+echo "CUSE:         $(./scripts/config --file .config --state CONFIG_CUSE)"
 echo "VIRTIO_VSOCK: $(./scripts/config --file .config --state CONFIG_VIRTIO_VSOCK)"
-echo "VIRTIO_FS: $(./scripts/config --file .config --state CONFIG_VIRTIO_FS)"
+echo "VIRTIO_FS:    $(./scripts/config --file .config --state CONFIG_VIRTIO_FS)"
+echo "VIRTIO_NET:   $(./scripts/config --file .config --state CONFIG_VIRTIO_NET)"
+echo "VIRTIO_BLK:   $(./scripts/config --file .config --state CONFIG_VIRTIO_BLK)"
 
 # Copy outputs
 cp "$KERNEL_IMAGE" "/output/${KERNEL_OUTPUT}"

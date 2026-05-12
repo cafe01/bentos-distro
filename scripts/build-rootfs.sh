@@ -161,6 +161,7 @@ echo "Copying workspace to writable build dir..."
 mkdir -p /build/lib
 cp -r /src/lib/bentosd /build/lib/
 cp -r /src/lib/bentos_fuse /build/lib/
+cp -r /src/lib/bentos-driver-sdk-dart /build/lib/
 
 # Stub out all other workspace members so pub can resolve without them.
 # We list only the packages we care about in a minimal workspace pubspec.
@@ -171,6 +172,7 @@ environment:
 workspace:
   - lib/bentosd
   - lib/bentos_fuse
+  - lib/bentos-driver-sdk-dart
 PUBSPEC
 
 cd /build
@@ -253,7 +255,7 @@ echo "--- Configuring system files ---"
 cp /configs/etc/hostname "$ROOTFS/etc/hostname"
 cp /configs/etc/hosts "$ROOTFS/etc/hosts"
 cp /configs/etc/securetty "$ROOTFS/etc/securetty"
-cp /configs/etc/modules "$ROOTFS/etc/modules"
+# /etc/modules intentionally omitted — kernel is all-builtin, no modprobe at boot.
 
 mkdir -p "$ROOTFS/etc/network"
 cp /configs/etc/network/interfaces "$ROOTFS/etc/network/interfaces"
@@ -289,46 +291,10 @@ echo "root:bentos" | chroot "$ROOTFS" chpasswd 2>/dev/null || {
     sed -i "s|^root:[^:]*|root:${HASH}|" "$ROOTFS/etc/shadow"
 }
 
-echo "--- Installing kernel modules (selective) ---"
-if [ -d /modules/lib/modules ]; then
-    KVER=$(ls /modules/lib/modules/ | head -1)
-    MODDIR="$ROOTFS/lib/modules/$KVER"
-    mkdir -p "$MODDIR/kernel"
-
-    NEEDED_MODULES="
-        kernel/fs/fuse/cuse.ko.gz
-        kernel/fs/fuse/virtiofs.ko.gz
-        kernel/net/vmw_vsock/vsock.ko.gz
-        kernel/net/vmw_vsock/vmw_vsock_virtio_transport_common.ko.gz
-        kernel/net/vmw_vsock/vmw_vsock_virtio_transport.ko.gz
-        kernel/net/vmw_vsock/vsock_diag.ko.gz
-        kernel/net/vmw_vsock/vsock_loopback.ko.gz
-    "
-    SRCMOD="/modules/lib/modules/$KVER"
-    for mod in $NEEDED_MODULES; do
-        src="$SRCMOD/$mod"
-        if [ -f "$src" ]; then
-            dst="$MODDIR/$mod"
-            mkdir -p "$(dirname "$dst")"
-            cp "$src" "$dst"
-            echo "  Installed: $mod"
-        else
-            echo "  WARNING: $mod not found"
-        fi
-    done
-
-    for f in modules.order modules.builtin modules.builtin.modinfo; do
-        [ -f "$SRCMOD/$f" ] && cp "$SRCMOD/$f" "$MODDIR/"
-    done
-
-    apk --root "$ROOTFS" --repository "$REPO_MAIN" --repository "$REPO_COMMUNITY" \
-        --allow-untrusted add kmod
-    chroot "$ROOTFS" depmod "$KVER" 2>/dev/null || echo "WARNING: depmod failed"
-    echo "Installed modules:"
-    find "$MODDIR" -name '*.ko*' -type f
-else
-    echo "WARNING: No kernel modules found at /modules/lib/modules"
-fi
+echo "--- Kernel modules: skipped (all-builtin kernel) ---"
+# Custom kernel ships everything we need as =y. No /lib/modules in rootfs,
+# no kmod package, no depmod, no /etc/modules. If a future driver needs to
+# be loadable at runtime, restore selective install here.
 
 echo "--- Installing BentOS binaries ---"
 if [ "$SKIP_BENTOS" = "false" ] && [ -f /bentos-bins/bentosd ]; then
@@ -366,7 +332,7 @@ chroot "$ROOTFS" rc-update add dmesg sysinit 2>/dev/null || true
 chroot "$ROOTFS" rc-update add mdev sysinit 2>/dev/null || true
 
 chroot "$ROOTFS" rc-update add hwclock boot 2>/dev/null || true
-chroot "$ROOTFS" rc-update add modules boot 2>/dev/null || true
+# 'modules' OpenRC service intentionally omitted — kernel is all-builtin.
 chroot "$ROOTFS" rc-update add sysctl boot 2>/dev/null || true
 chroot "$ROOTFS" rc-update add hostname boot 2>/dev/null || true
 chroot "$ROOTFS" rc-update add bootmisc boot 2>/dev/null || true
